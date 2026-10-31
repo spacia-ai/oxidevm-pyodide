@@ -79,10 +79,11 @@ export function socketBridge(host: SocketHost): SocketBridge {
   /** Turns whatever a host operation threw into the failure Python will see. */
   function translate(error: unknown, timedOut: boolean): SocketFailure {
     if (error instanceof SocketFailure) return error;
+    // When the time ran out the host cancels the operation and may answer EINTR; the cause is the timeout.
+    if (timedOut) return failureFor("ETIMEDOUT", error);
     const errno = host.kit.errno.of(error);
     const entry = errno === undefined ? undefined : LINUX_ERRORS.get(errno);
     if (entry !== undefined) return failureFor(entry.code, error);
-    if (timedOut) return failureFor("ETIMEDOUT", error);
     if (host.signal.aborted) return new SocketFailure("EINTR", "The module is stopping", { cause: error });
     return new SocketFailure("EIO", error instanceof Error ? error.message : "Input/output error", { cause: error });
   }

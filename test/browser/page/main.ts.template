@@ -1,0 +1,24 @@
+// Copied into a project that `oxidevm wasm add` has populated: `pyodide` is the generated, fully typed handle.
+import type { SpawnOptions } from "@oxidevm/sdk/wasm";
+import { pyodide } from "./oxidevm.modules.generated.ts";
+import { runScenarios } from "./scenarios.ts";
+import type { ScenarioConfig, ScenarioResult } from "./scenarios.ts";
+
+declare global {
+  interface Window {
+    /** Provided by the Node side of the test, which prints each result as it arrives. */
+    oxidevmReport?: (result: ScenarioResult) => Promise<void>;
+  }
+}
+
+// A compile-time check of the typed handle: the module's options and arguments come from its manifest.
+type Options = SpawnOptions<typeof pyodide.manifest>;
+export const accepted: Options = { args: ["/workspace/run.py"], cwd: "/workspace", options: { packages: ["pandas", "matplotlib"] } };
+// @ts-expect-error scipy is not one of the packages the manifest offers (this line shows the handle rejects it, and `accepted` above shows it accepts the rest)
+export const rejected: Options = { options: { packages: ["scipy"] } };
+
+// The Node side of the test drives this page: it calls `runModuleScenarios` with the served locations.
+Object.defineProperty(window, "runModuleScenarios", {
+  value: (config: ScenarioConfig) => runScenarios(config, pyodide, result => { void window.oxidevmReport?.(result); }),
+  enumerable: true,
+});

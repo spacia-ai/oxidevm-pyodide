@@ -15,9 +15,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 26
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run fetch-upstream
       - run: pnpm run build
       - name: The tag must name the version in module.json
         run: test "v$(node -p "JSON.parse(require('node:fs').readFileSync('dist/module.json', 'utf8')).version")" = "$GITHUB_REF_NAME"

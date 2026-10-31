@@ -156,6 +156,17 @@ describe("sending and receiving", () => {
     expect(text(await bridge.recv(handle, 10, 1000))).toBe("late");
   });
 
+  it("reports ETIMEDOUT, not the interruption the host reports, when the timeout is what ended the wait", async () => {
+    // The real host cancels a blocked operation with EINTR (errno 4) when its signal aborts, whoever aborted it.
+    const fake = fakeSockets();
+    fake.listen(`unix:${UNIX}`, () => undefined);
+    const interrupted = (_fd: unknown, _count: unknown, options?: { readonly signal?: AbortSignal }): Promise<never> => new Promise((_resolve, reject) => { options?.signal?.addEventListener("abort", () => { reject(new LinuxError(4)); }, { once: true }); });
+    const { bridge } = setup({ sockets: { ...fake.sockets, read: interrupted, write: interrupted } });
+    const handle = await bridge.connect("unix", UNIX, 0, 1000);
+    expect((await failure(bridge.recv(handle, 10, 20))).code).toBe("ETIMEDOUT");
+    expect((await failure(bridge.send(handle, bytes("x"), 20))).code).toBe("ETIMEDOUT");
+  });
+
   it("reports EINTR when the module stops while it waits", async () => {
     const controller = new AbortController();
     const { bridge, fake } = setup({ signal: controller.signal });

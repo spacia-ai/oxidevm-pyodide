@@ -59,8 +59,12 @@ export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErr
     if (descriptor === undefined) throw failure(EBADF);
     return descriptor;
   }
+  /**
+   * A node for whatever the host has at a path. Sockets, pipes and devices are nodes too: a directory that holds one (a
+   * service's socket beside the programs that use it) must still list, import from and describe. Opening one is the host's
+   * to refuse, and creating one is refused in `mknod`.
+   */
   function make(parent: FS.FSNode | null, name: string, mode: number): FS.FSNode {
-    if (!fs.isDir(mode) && !fs.isFile(mode) && !fs.isLink(mode)) throw failure(ENOTSUP);
     return Object.assign(fs.createNode(parent, name, mode), { node_ops: nodes, stream_ops: streams });
   }
 

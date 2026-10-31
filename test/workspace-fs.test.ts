@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { createServer } from "node:net";
 import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +22,8 @@ let host: NodeFiles;
 let py: PyodideInterface;
 /** What the bridge reported as an unexpected host failure. */
 const reported: unknown[] = [];
+/** The sizes of the writes that reached the host. */
+const writeSizes: number[] = [];
 /** Operations that fail or answer differently, switched on for one test. */
 const faults: { lstat?: (path: string) => ReturnType<SyncFiles["lstat"]>; read?: () => never } = {};
 
@@ -53,6 +56,7 @@ beforeAll(async () => {
     ...host.files,
     lstat: path => (faults.lstat === undefined ? host.files.lstat(path) : faults.lstat(typeof path === "string" ? path : "")),
     read: (fd, count) => { if (faults.read !== undefined) faults.read(); return host.files.read(fd, count); },
+    write: (fd, bytes) => { writeSizes.push(bytes.length); return host.files.write(fd, bytes); },
   };
   py = await startPyodide();
   mountWorkspace(py.FS, files, errno, error => reported.push(error));
@@ -228,6 +232,20 @@ json.dumps({"length": len(content), "sha": hashlib.sha256(content).hexdigest()})
 `)).toEqual({ length: data.length, sha: createHash("sha256").update(data).digest("hex") });
   });
 
+  it("hands the host at most the transfer limit in one write, and says how much it took", async () => {
+    const dir = await directory("write-limit");
+    writeSizes.length = 0;
+    expect(python(`
+fd = os.open("${dir}/data", os.O_CREAT | os.O_WRONLY, 0o600)
+written = os.write(fd, bytes(${String(MAX_TRANSFER_BYTES + 5)}))
+rest = os.write(fd, bytes(5))
+os.close(fd)
+json.dumps([written, rest])
+`)).toEqual([MAX_TRANSFER_BYTES, 5]);
+    expect(writeSizes).toEqual([MAX_TRANSFER_BYTES, 5]);
+    expect((await stat(join(root, "write-limit/data"))).size).toBe(MAX_TRANSFER_BYTES + 5);
+  });
+
   it("moves at most the transfer limit in one host call", async () => {
     const dir = await directory("limit");
     await writeFile(join(root, "limit/data"), Buffer.alloc(MAX_TRANSFER_BYTES + 5, 1));
@@ -332,6 +350,35 @@ json.dumps({
   });
 });
 
+describe("special files", () => {
+  it("lists and describes a directory that holds a Unix socket, so that Python can import from it", async () => {
+    // Service sockets live beside the programs that use them, and `python script.py` puts the script's directory on sys.path.
+    const dir = await directory("with-socket");
+    await writeFile(join(root, "with-socket/helper_in_socket_dir.py"), "VALUE = 'imported from the directory with the socket'\n");
+    const server = createServer();
+    await new Promise<void>(resolve => { server.listen(join(root, "with-socket/service.sock"), resolve); });
+    try {
+      const seen = python(`
+import stat, sys
+sys.path.insert(0, "${dir}")
+import helper_in_socket_dir
+info = os.stat("${dir}/service.sock")
+json.dumps({
+    "listing": sorted(os.listdir("${dir}")),
+    "imported": helper_in_socket_dir.VALUE,
+    "is_socket": stat.S_ISSOCK(info.st_mode),
+    "entry_is_file": [entry.name for entry in os.scandir("${dir}") if entry.is_file(follow_symlinks=False)],
+    "open": failure(lambda: open("${dir}/service.sock")),
+})
+`);
+      expect(seen).toMatchObject({ listing: ["helper_in_socket_dir.py", "service.sock"], imported: "imported from the directory with the socket", is_socket: true });
+      expect(field(seen, "open")).not.toBeNull();
+    } finally {
+      await new Promise<void>(resolve => { server.close(() => { resolve(); }); });
+    }
+  });
+});
+
 describe("errors", () => {
   it("reports each host failure as the matching Python exception, with Python's own errno value", async () => {
     const dir = await directory("errors");
@@ -387,6 +434,26 @@ json.dumps({
     const dir = await directory("unsupported");
     await writeFile(join(root, "unsupported/file"), "");
     expect(python(`json.dumps(failure(lambda: os.utime("${dir}/file", (1, 1))))`)).toMatchObject({ name: "ENOTSUP" });
+    // Creating a special file is refused (Python has no os.mknod here, so this goes to Emscripten's file system directly),
+    // although a directory may hold one that something else made.
+    let refused: unknown;
+    try {
+      py.FS.mkdev(`${dir}/device`, 0o600, 0);
+    } catch (error: unknown) {
+      refused = field(error, "errno");
+    }
+    expect(refused).toBe(138);
+    // A file is created through `open`, which supplies its real mode afterwards; creating one directly with a mode is refused.
+    const create: unknown = Reflect.get(py.FS, "create");
+    let refusedCreate: unknown;
+    try {
+      if (typeof create !== "function") throw new Error("Emscripten's FS.create is missing");
+      Reflect.apply(create, py.FS, [`${dir}/direct`, 0o600]);
+    } catch (error: unknown) {
+      refusedCreate = field(error, "errno");
+    }
+    expect(refusedCreate).toBe(138);
+    expect(await readdir(join(root, "unsupported"))).toEqual(["file"]);
   });
 
   it("keeps the interpreter alive when the host throws something that is not an errno", async () => {

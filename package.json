@@ -3,6 +3,9 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "build": "oxidevm wasm build",
     "check": "tsc --noEmit && tsc --noEmit -p test && tsc --noEmit -p scripts && eslint . --max-warnings 0 && oxidevm wasm build --check",
@@ -10,7 +13,7 @@
     "notices": "node scripts/generate-notices.ts",
     "release": "oxidevm wasm release",
     "test": "vitest run",
-    "test:browser": "node test/browser/run.ts"
+    "test:browser": "node test/browser/harness.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
