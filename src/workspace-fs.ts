@@ -1,0 +1,171 @@
+import type { PyodideInterface } from "pyodide";
+import type { FileDescriptor, KitErrno, SyncFiles } from "./host-types.ts";
+
+/** Emscripten's file system object, which Pyodide exposes as `pyodide.FS`. */
+export type EmscriptenFS = PyodideInterface["FS"];
+
+/** Where the VM's workspace appears in Python. The path is the same in the VM, so no translation is needed. */
+export const WORKSPACE = "/workspace";
+
+/** The most bytes one read or write moves, so that a request for a huge buffer cannot ask the host for the same. */
+export const MAX_TRANSFER_BYTES = 16 * 1024 ** 2;
+
+// Linux errno values, which `errno.toEmscripten` turns into the numbers Emscripten uses.
+const EIO = 5, EBADF = 9, EINVAL = 22, EOVERFLOW = 75, ENOTSUP = 95;
+// Linux open flags.
+const O_CREAT = 0o100, O_EXCL = 0o200;
+const PERMISSION_BITS = 0o7777;
+/** Emscripten asks `mknod` for a new file with every permission bit set, then applies the real mode with `chmod`. */
+const MKNOD_ANY_MODE = 0o777;
+const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
+
+/**
+ * Mounts the VM's `/workspace` into Pyodide's file system. Every operation goes to the VM's own file API, so Linux keeps
+ * ownership of permissions, atomic renames and locking, and a file that Python writes is at once the file Linux reads.
+ * A failed host call becomes the matching `OSError` (the host reports a Linux errno and Emscripten numbers errors
+ * differently, so `errno` translates). Anything else that a host call throws is handed to `report` and becomes `EIO`:
+ * an exception that is not an errno would unwind through the interpreter's frames, and Pyodide treats that as fatal.
+ */
+export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErrno, report: (error: unknown) => void = () => undefined): void {
+  /** A file Emscripten has created but not yet opened: the stream that will own it once `chmod` supplies its real mode. */
+  const creating = new WeakMap<FS.FSNode, FS.FSStream | null>();
+  const descriptors = new Map<FS.FSStream, FileDescriptor>();
+
+  const failure = (linuxErrno: number): FS.ErrnoError => new fs.ErrnoError(errno.toEmscripten(linuxErrno));
+
+  function call<T>(operation: () => T): T {
+    try {
+      return operation();
+    } catch (error: unknown) {
+      if (error instanceof fs.ErrnoError) throw error;
+      const linuxErrno = errno.of(error);
+      if (linuxErrno !== undefined) throw failure(linuxErrno);
+      report(error);
+      throw failure(EIO);
+    }
+  }
+  function failWith(linuxErrno: number): never {
+    throw failure(linuxErrno);
+  }
+  /** A file offset as the host takes it. Emscripten passes integers; anything else is refused instead of thrown at. */
+  function offsetOf(value: number): bigint {
+    if (!Number.isSafeInteger(value)) return failWith(EINVAL);
+    return BigInt(value);
+  }
+  const path = (node: FS.FSNode): string => fs.getPath(node);
+  const child = (node: FS.FSNode, name: string): string => `${path(node)}/${name}`;
+  function descriptorOf(stream: FS.FSStream): FileDescriptor {
+    const descriptor = descriptors.get(stream);
+    if (descriptor === undefined) throw failure(EBADF);
+    return descriptor;
+  }
+  function make(parent: FS.FSNode | null, name: string, mode: number): FS.FSNode {
+    if (!fs.isDir(mode) && !fs.isFile(mode) && !fs.isLink(mode)) throw failure(ENOTSUP);
+    return Object.assign(fs.createNode(parent, name, mode), { node_ops: nodes, stream_ops: streams });
+  }
+
+  /** Completes the creation of a file: opens it for real with the mode Emscripten has now supplied, and gives it its descriptor. */
+  function finishCreating(node: FS.FSNode, mode: number): void {
+    const stream = creating.get(node);
+    if (stream === undefined || stream === null) throw failure(ENOTSUP);
+    // `O_EXCL` makes a file that appeared in the meantime an error instead of a silent reuse; Linux applies its umask.
+    const descriptor = files.open(path(node), stream.flags | O_CREAT | O_EXCL, mode & PERMISSION_BITS);
+    descriptors.set(stream, descriptor);
+    creating.delete(node);
+    node.mode = files.fstat(descriptor).mode;
+  }
+
+  const nodes: FS.NodeOps = {
+    getattr: node => call(() => {
+      const stat = files.lstat(path(node)), size = Number(stat.size);
+      if (!Number.isSafeInteger(size)) throw failure(EOVERFLOW);
+      return {
+        dev: Number(stat.device), ino: Number(stat.inode), mode: stat.mode, nlink: Number(stat.links), uid: stat.uid, gid: stat.gid, rdev: 0,
+        size, blksize: 4096, blocks: Math.ceil(size / 512),
+        atime: new Date(Number(stat.accessedNs / 1_000_000n)), mtime: new Date(Number(stat.modifiedNs / 1_000_000n)), ctime: new Date(Number(stat.changedNs / 1_000_000n)),
+      };
+    }),
+    setattr(node, attributes: Partial<FS.Stats>) {
+      call(() => {
+        const { mode, size, atime, mtime } = attributes;
+        if (mode !== undefined) {
+          if (creating.has(node)) finishCreating(node, mode);
+          else files.chmod(path(node), mode & PERMISSION_BITS);
+        }
+        // Setting access and modification times has no host operation.
+        if (size === undefined && (atime !== undefined || mtime !== undefined)) throw failure(ENOTSUP);
+        if (size !== undefined) {
+          if (!Number.isSafeInteger(size) || size < 0) throw failure(EINVAL);
+          files.truncate(path(node), size);
+        }
+      });
+    },
+    lookup: (parent, name) => call(() => make(parent, name, files.lstat(child(parent, name)).mode)),
+    mknod: (parent, name, mode) => call(() => {
+      const target = child(parent, name);
+      if (fs.isDir(mode)) {
+        files.mkdir(target, mode & PERMISSION_BITS);
+        return make(parent, name, mode);
+      }
+      if (!fs.isFile(mode) || (mode & MKNOD_ANY_MODE) !== MKNOD_ANY_MODE) throw failure(ENOTSUP);
+      const node = make(parent, name, mode);
+      creating.set(node, null);
+      return node;
+    }),
+    rename(node, directory, name) {
+      call(() => {
+        files.rename(path(node), child(directory, name));
+        node.parent = directory;
+        node.name = name;
+      });
+    },
+    unlink(parent, name) { call(() => { files.unlink(child(parent, name)); }); },
+    rmdir(parent, name) { call(() => { files.unlink(child(parent, name), true); }); },
+    readdir: node => call(() => [".", "..", ...files.readdir(path(node)).map(entry => entry.name).filter(name => name !== "." && name !== "..")]),
+    symlink(parent, name, target) { call(() => { files.symlink(target, child(parent, name)); }); },
+    readlink: node => call(() => files.readlink(path(node))),
+  };
+
+  const streams: FS.StreamOps = {
+    open(stream) {
+      call(() => {
+        if (creating.has(stream.object)) creating.set(stream.object, stream);
+        else descriptors.set(stream, files.open(path(stream.object), stream.flags));
+      });
+    },
+    close(stream) {
+      call(() => {
+        const descriptor = descriptorOf(stream);
+        descriptors.delete(stream);
+        files.close(descriptor);
+      });
+    },
+    read: (stream, buffer, offset, length, position) => call(() => {
+      const descriptor = descriptorOf(stream);
+      files.seek(descriptor, offsetOf(position), "start");
+      const count = Math.min(length, MAX_TRANSFER_BYTES);
+      // A host that answered with more than was asked for must not write past the region Emscripten lent us.
+      const bytes = files.read(descriptor, count).subarray(0, count);
+      buffer.set(bytes, offset);
+      return bytes.length;
+    }),
+    write: (stream, buffer, offset, length, position) => call(() => {
+      const descriptor = descriptorOf(stream);
+      files.seek(descriptor, offsetOf(position), "start");
+      return files.write(descriptor, buffer.subarray(offset, offset + Math.min(length, MAX_TRANSFER_BYTES)));
+    }),
+    llseek: (stream, offset, whence) => call(() => {
+      const descriptor = descriptorOf(stream);
+      // The position of the stream is Emscripten's: Linux's own offset moves when a read or write names its position.
+      const reached = whence === SEEK_END ? files.seek(descriptor, offsetOf(offset), "end")
+        : whence === SEEK_SET || whence === SEEK_CUR ? files.seek(descriptor, offsetOf((whence === SEEK_CUR ? stream.position : 0) + offset), "start")
+        : failWith(EINVAL);
+      const position = Number(reached);
+      if (!Number.isSafeInteger(position)) throw failure(EOVERFLOW);
+      return position;
+    }),
+  };
+
+  fs.mkdirTree(WORKSPACE);
+  fs.mount({ mount: () => make(null, "/", files.stat(WORKSPACE).mode), syncfs: (_mount, _populate, done) => { done(null); } }, {}, WORKSPACE);
+}

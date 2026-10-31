@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.cache/
+
+# Upstream binaries are mirrored byte for byte by `pnpm run fetch-upstream` and pinned in upstream/lock.json.
+/upstream/*
+!/upstream/lock.json

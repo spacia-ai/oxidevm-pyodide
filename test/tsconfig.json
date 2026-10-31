@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["node", "emscripten"] },
+  "include": ["./**/*.ts", "../module.ts", "../src/**/*.ts"],
+  "exclude": ["../src/pyodide-node-types.d.ts"]
+}
