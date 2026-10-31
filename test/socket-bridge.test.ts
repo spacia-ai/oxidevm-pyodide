@@ -55,6 +55,8 @@ describe("connecting", () => {
       ["unix", `/${"x".repeat(107)}`, 0, 1000], ["unix", "/tmp/a\0b", 0, 1000],
       ["tcp", "127.0.0.1", 0, 1000], ["tcp", "127.0.0.1", 65536, 1000], ["tcp", "127.0.0.1", 1.5, 1000], ["tcp", "127.0.0.1", "5432", 1000],
       ["tcp", "localhost", 5432, 1000], ["tcp", "example.com", 5432, 1000], ["tcp", "1.2.3", 5432, 1000], ["tcp", "::g", 5432, 1000],
+      // The whole text must be an address: something before or after it, or another group, is no IPv4 address.
+      ["tcp", "1.2.3.4.5", 5432, 1000], ["tcp", "a1.2.3.4", 5432, 1000], ["tcp", "1.2.3.4a", 5432, 1000], ["tcp", " 1.2.3.4", 5432, 1000], ["tcp", "1.2.3.4\n", 5432, 1000],
       ["unix", UNIX, 0, -1], ["unix", UNIX, 0, 1.5], ["unix", UNIX, 0, "10"], ["unix", UNIX, 0, 24 * 60 * 60 * 1000 + 1],
     ];
     for (const request of requests) {
@@ -223,6 +225,18 @@ describe("closing", () => {
       expect((await failure(bridge.recv(used, 1, 0))).code, String(used)).toBe("EBADF");
     }
     await expect(bridge.close("1")).resolves.toBeUndefined();
+  });
+
+  it("is not undone by a descriptor that fails to close: close and closeAll still resolve, and a failed attempt keeps its own error", async () => {
+    const fake = fakeSockets();
+    fake.listen(`unix:${UNIX}`, echoUpperCase());
+    const { bridge } = setup({ sockets: { ...fake.sockets, close: () => Promise.reject(new LinuxError(5)) } });
+    const first = await bridge.connect("unix", UNIX, 0, 1000);
+    await bridge.connect("unix", UNIX, 0, 1000);
+    await expect(bridge.close(first)).resolves.toBeUndefined();
+    await expect(bridge.closeAll()).resolves.toBeUndefined();
+    // Releasing the descriptor of the attempt that failed fails too; the program still learns why the attempt failed.
+    expect((await failure(bridge.connect("unix", "/workspace/_oxidevm/missing.sock", 0, 1000))).code).toBe("ENOENT");
   });
 
   it("closes every socket that is still open when the program ends", async () => {

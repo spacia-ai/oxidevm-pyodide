@@ -56,6 +56,17 @@ print((failed.stdout, failed.stderr, failed.returncode))
 `)).toBe("raised: Native command exited 7: boom\n('out', 'boom', 7)\n");
   });
 
+  it("treats a program that a signal ended as failed, with minus the signal number as its return code", async () => {
+    children.set("/bin/crash", { stderr: "Segmentation fault", exit: { kind: "signaled", signal: null, signalNumber: 11 } });
+    expect(await printed(`
+try:
+    oxidevm.run(["/bin/crash"])
+except RuntimeError as error:
+    print("raised:", error)
+print(oxidevm.run(["/bin/crash"], check=False).returncode)
+`)).toBe("raised: Native command exited -11: Segmentation fault\n-11\n");
+  });
+
   it("cuts standard error in the message at 4096 characters", async () => {
     children.set("/bin/noisy", { stderr: "e".repeat(5000), exit: { kind: "exited", code: 1 } });
     expect(await printed('try:\n    oxidevm.run(["/bin/noisy"])\nexcept RuntimeError as error:\n    print(len(str(error)))')).toBe(`${String("Native command exited 1: ".length + 4096)}\n`);
@@ -198,6 +209,30 @@ with oxidevm.connect_tcp(7002) as connection:
     } finally {
       guest.sockets.sockets.write = original;
     }
+  });
+
+  it("hands the bridge timeouts in whole milliseconds, at least one: a very short timeout never turns into none", async () => {
+    guest.socketRequests.length = 0;
+    await printed(`
+with oxidevm.connect_tcp(5432, timeout=0.0001) as connection:
+    connection.settimeout(0.0001)
+    connection.sendall(b"a")
+    connection.settimeout(2.5)
+    connection.sendall(b"b")
+    connection.settimeout(None)
+    connection.sendall(b"c")
+`);
+    expect(guest.socketRequests.map(request => [request.operation, request.timeoutMs])).toEqual([["connect", 1], ["send", 1], ["send", 2500], ["send", 0]]);
+  });
+
+  it("asks for at most a megabyte in one receive, whatever size the program names", async () => {
+    guest.socketRequests.length = 0;
+    expect(await printed(`
+with oxidevm.connect_unix("${UNIX}") as connection:
+    connection.sendall(b"abc")
+    print(connection.recv(50 * 1024 * 1024))
+`)).toBe("b'ABC'\n");
+    expect(guest.socketRequests.flatMap(request => (request.operation === "recv" ? [request.size] : []))).toEqual([1024 ** 2]);
   });
 
   it("times out a connection attempt and, once settimeout is used, a silent read", async () => {

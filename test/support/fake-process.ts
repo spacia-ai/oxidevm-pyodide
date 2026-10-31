@@ -7,7 +7,8 @@ import { descriptor, processId } from "./brands.ts";
 export interface Child {
   readonly stdout?: string | Uint8Array;
   readonly stderr?: string;
-  readonly exit?: { readonly kind: "exited"; readonly code: number };
+  /** How it ends when nothing signals it: with a status (the default is 0) or, as if something else sent one, by a signal. */
+  readonly exit?: { readonly kind: "exited"; readonly code: number } | { readonly kind: "signaled"; readonly signal: null; readonly signalNumber: number };
   /** The child keeps running until it is sent a signal. */
   readonly hang?: boolean;
 }

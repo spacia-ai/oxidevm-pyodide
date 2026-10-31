@@ -8,6 +8,7 @@ import { installGuest } from "../../src/guest.ts";
 import { nativeRunner } from "../../src/native-bridge.ts";
 import { invocationOf, pythonEnvironment, runScript } from "../../src/script.ts";
 import { socketBridge } from "../../src/socket-bridge.ts";
+import type { SocketBridge } from "../../src/socket-bridge.ts";
 import { attachStandardStreams } from "../../src/stdio.ts";
 import { mountWorkspace } from "../../src/workspace-fs.ts";
 import { fakeProcess } from "./fake-process.ts";
@@ -19,6 +20,11 @@ import type { FakeStdio } from "./fake-stdio.ts";
 import { nodeFiles } from "./node-files.ts";
 import type { NodeFiles } from "./node-files.ts";
 import { startPyodide } from "./pyodide-node.ts";
+
+/** What the Python module asked of the socket bridge, with the values exactly as the bridge received them. */
+export type SocketRequest =
+  | { readonly operation: "connect" | "send"; readonly timeoutMs: unknown }
+  | { readonly operation: "recv"; readonly timeoutMs: unknown; readonly size: unknown };
 
 export interface RunResult {
   readonly status: number;
@@ -38,6 +44,8 @@ export interface GuestFixture {
   readonly stdio: FakeStdio;
   /** Every request the native runner made to the kit. */
   readonly nativeRequests: NativeRunRequest[];
+  /** Every connect, send and recv the Python module made to the socket bridge. */
+  readonly socketRequests: SocketRequest[];
   /** Ends the module the way the runner does when `main` returns: aborts its signal and closes leftover sockets. */
   readonly stop: () => Promise<void>;
   /** Writes `source` to a script in the workspace and runs it as `main` would. */
@@ -56,15 +64,23 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
   const lifetime = new AbortController();
   const nativeRequests: NativeRunRequest[] = [];
   const spyKit = { ...kit, runNative: (host: Parameters<typeof kit.runNative>[0], request: NativeRunRequest) => { nativeRequests.push(request); return kit.runNative(host, request); } };
-  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: socketBridge({ sockets: sockets.sockets, kit, signal: lifetime.signal }) };
+  const socketRequests: SocketRequest[] = [];
+  const realSockets = socketBridge({ sockets: sockets.sockets, kit, signal: lifetime.signal });
+  const recordingSockets: SocketBridge = {
+    ...realSockets,
+    connect: (kind, target, port, timeoutMs) => { socketRequests.push({ operation: "connect", timeoutMs }); return realSockets.connect(kind, target, port, timeoutMs); },
+    send: (handle, data, timeoutMs) => { socketRequests.push({ operation: "send", timeoutMs }); return realSockets.send(handle, data, timeoutMs); },
+    recv: (handle, size, timeoutMs) => { socketRequests.push({ operation: "recv", timeoutMs, size }); return realSockets.recv(handle, size, timeoutMs); },
+  };
+  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets };
   const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar" }));
   mountWorkspace(py.FS, files.files, kit.errno);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
   installGuest(py, IDENTITY, bridges);
 
   return {
-    py, files, process, sockets, stdio, nativeRequests,
-    stop: async () => { lifetime.abort(); await bridges.sockets.closeAll(); },
+    py, files, process, sockets, stdio, nativeRequests, socketRequests,
+    stop: async () => { lifetime.abort(); await realSockets.closeAll(); },
     async run(source, options = {}) {
       const name = options.name ?? "program.py";
       await writeFile(join(root, name), source);

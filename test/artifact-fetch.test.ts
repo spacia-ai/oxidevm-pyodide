@@ -52,6 +52,17 @@ describe("contentTypeFor", () => {
 });
 
 describe("scopedFetch under the virtual index", () => {
+  it("serves only under the directory of the index when the index has a path of its own", async () => {
+    const { fetch, passed } = recordingFetch();
+    const run = scopedFetch({ index: "https://pyodide.invalid/v1/", files: served().files }, fetch);
+    expect((await run("https://pyodide.invalid/v1/pyodide.asm.wasm")).status).toBe(200);
+    // "/zz/" is as long as "/v1/", so only the check of the directory keeps this from being the file.
+    for (const outside of ["https://pyodide.invalid/zz/pyodide.asm.wasm", "https://pyodide.invalid/pyodide.asm.wasm", "https://pyodide.invalid/v2/pyodide.asm.wasm"]) {
+      expect(await rejection(run(outside)), outside).toBeInstanceOf(TypeError);
+    }
+    expect(passed).toEqual([]);
+  });
+
   it("serves a declared artifact with its bytes and type", async () => {
     const { fetch, passed } = recordingFetch();
     const response = await scopedFetch(served(), fetch)(`${VIRTUAL_INDEX}pyodide.asm.wasm`);

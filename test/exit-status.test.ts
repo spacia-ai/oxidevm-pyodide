@@ -27,6 +27,13 @@ describe("exitStatus", () => {
     expect(exitStatus(-(2n ** 64n) - 1n)).toBe(119);
   });
 
+  it("treats a number beyond the safe range, which is no longer exact, as a failure", () => {
+    for (const value of [2 ** 53, 2 ** 60, -(2 ** 60), 1e300]) expect(exitStatus(value), String(value)).toBe(1);
+    // The largest exact integer still wraps (its low byte is 255) and is then limited like any other status.
+    expect(exitStatus(Number.MAX_SAFE_INTEGER)).toBe(119);
+    expect(exitStatus(Number.MAX_SAFE_INTEGER - 255)).toBe(0);
+  });
+
   it("treats anything that is not an integer as a failure", () => {
     for (const value of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, "0", null, undefined, {}, true]) {
       expect(exitStatus(value)).toBe(1);

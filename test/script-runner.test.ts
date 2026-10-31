@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startGuest } from "./support/guest-fixture.ts";
@@ -103,6 +103,16 @@ describe("the program's world", () => {
   it("finds modules next to the script", async () => {
     await writeFile(join(guest.files.real("/workspace"), "sibling_module.py"), "VALUE = 'from the sibling'\n");
     expect(await guest.run("import sibling_module\nprint(sibling_module.VALUE)")).toEqual({ status: 0, stdout: "from the sibling\n", stderr: "" });
+  });
+
+  it("has the script's own directory first on sys.path, so that a module next to it wins over an installed one", async () => {
+    const sibling = join(guest.files.real("/workspace"), "colorsys.py");
+    await writeFile(sibling, "VALUE = 'the sibling, not the standard library'\n");
+    try {
+      expect(await guest.run("import sys, colorsys\nprint(sys.path[0])\nprint(colorsys.VALUE)")).toEqual({ status: 0, stdout: "/workspace\nthe sibling, not the standard library\n", stderr: "" });
+    } finally {
+      await rm(sibling);
+    }
   });
 
   it("allows top-level await", async () => {

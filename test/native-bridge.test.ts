@@ -46,9 +46,10 @@ describe("the arguments of a native command", () => {
     const { run, spawned } = setup(() => ({}));
     const command = JSON.stringify(["/bin/true"]);
     for (const timeout of [0, -1, 180_001, Number.NaN, 0.5, Number.POSITIVE_INFINITY]) await expect(run(command, "", timeout), String(timeout)).rejects.toThrow();
-    for (const timeout of ["1000", null, undefined, 1000n]) await expect(run(command, "", timeout), String(timeout)).rejects.toThrow("timeout");
+    // What is not a number or text is refused by this module's own check, before the kit sees it.
+    for (const timeout of ["1000", null, undefined, 1000n]) expect(await failure(run(command, "", timeout)), String(timeout)).toBe("Native timeout must be a number");
     await expect(run(command, "x".repeat(5 * 1024 ** 2 + 1), 1000)).rejects.toThrow(/input exceeds/u);
-    for (const input of [undefined, null, 5, new Uint8Array(2)]) await expect(run(command, input, 1000), String(input)).rejects.toThrow("input");
+    for (const input of [undefined, null, 5, new Uint8Array(2)]) expect(await failure(run(command, input, 1000)), String(input)).toBe("Native text input must be a string");
     expect(spawned).toHaveLength(0);
     await expect(run(command, "x".repeat(5 * 1024 ** 2), 180_000)).resolves.toContain("returncode");
     await expect(run(command, "", 1)).resolves.toContain("returncode");

@@ -1,22 +1,22 @@
 import { createHash, randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { lstat, mkdir, readFile, readdir, readlink, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LinuxError } from "@oxidevm/sdk/js-process";
 import type { PyodideInterface } from "pyodide";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { SyncFiles } from "../src/host-types.ts";
-import { MAX_TRANSFER_BYTES, mountWorkspace } from "../src/workspace-fs.ts";
+import { MAX_TRANSFER_BYTES } from "../src/workspace-fs.ts";
 import { field } from "./support/decode.ts";
-import { errno, nodeFiles } from "./support/node-files.ts";
 import type { NodeFiles } from "./support/node-files.ts";
-import { startPyodide } from "./support/pyodide-node.ts";
+import { startWorkspace } from "./support/workspace-fixture.ts";
+import type { Faults, Workspace } from "./support/workspace-fixture.ts";
 
 // These tests run the bridge inside the real Pyodide, against a directory of this machine that stands in for the VM's
-// /workspace. Python does ordinary file work; the assertions look at the directory (what Linux would see) and at what
-// Python reports, including the errno values, which Emscripten numbers differently from Linux.
+// /workspace (see support/workspace-fixture.ts). File times and the attributes Emscripten sets are in
+// workspace-fs-attributes.test.ts.
 
+let workspace: Workspace;
 let root: string;
 let host: NodeFiles;
 let py: PyodideInterface;
@@ -24,47 +24,36 @@ let py: PyodideInterface;
 const reported: unknown[] = [];
 /** The sizes of the writes that reached the host. */
 const writeSizes: number[] = [];
-/** Operations that fail or answer differently, switched on for one test. */
-const faults: { lstat?: (path: string) => ReturnType<SyncFiles["lstat"]>; read?: () => never; utimes?: () => never } = {};
+const faults: Faults = {};
 
-const PRELUDE = `import errno, hashlib, json, os
-def failure(operation):
-    try:
-        operation()
-    except OSError as error:
-        return {"class": type(error).__name__, "errno": error.errno, "name": errno.errorcode.get(error.errno)}
-    return None
-`;
-
-/** Runs Python whose last expression is a JSON string, and returns what that decodes to. */
-function python(code: string): unknown {
-  const text: unknown = py.runPython(`${PRELUDE}${code}`);
-  if (typeof text !== "string") throw new Error("the Python code must end with json.dumps(...)");
-  const value: unknown = JSON.parse(text);
-  return value;
-}
-
-async function directory(name: string): Promise<string> {
-  await mkdir(join(root, name), { recursive: true });
-  return `/workspace/${name}`;
-}
+const python = (code: string): unknown => workspace.python(code);
+const directory = (name: string): Promise<string> => workspace.directory(name);
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), "pyodide-fs-"));
-  host = nodeFiles(root);
-  const files: SyncFiles = {
-    ...host.files,
-    lstat: path => (faults.lstat === undefined ? host.files.lstat(path) : faults.lstat(typeof path === "string" ? path : "")),
-    read: (fd, count) => { if (faults.read !== undefined) faults.read(); return host.files.read(fd, count); },
-    write: (fd, bytes) => { writeSizes.push(bytes.length); return host.files.write(fd, bytes); },
-    utimes: (path, access, modification, options) => { if (faults.utimes !== undefined) faults.utimes(); host.files.utimes(path, access, modification, options); },
-  };
-  py = await startPyodide();
-  mountWorkspace(py.FS, files, errno, error => reported.push(error));
+  workspace = await startWorkspace({ faults, report: error => reported.push(error), onWrite: size => writeSizes.push(size) });
+  ({ root, host, py } = workspace);
 });
 
 afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+  await workspace.dispose();
+});
+
+// First, because Python's own file layer loops without end on a seek that goes wrong, which would hang every test after it
+// instead of failing one.
+describe("the position of a stream", () => {
+  it("continues from the position of the stream, which is Emscripten's, and not from where the host's descriptor stands", async () => {
+    const dir = await directory("seek-direct");
+    await writeFile(join(root, "seek-direct/letters"), "abcdefghij");
+    const stream = py.FS.open(`${dir}/letters`, "r");
+    try {
+      expect(py.FS.llseek(stream, 4, 0)).toBe(4);
+      expect(py.FS.llseek(stream, 3, 1)).toBe(7);
+      expect(py.FS.llseek(stream, -2, 2)).toBe(8);
+      expect(py.FS.llseek(stream, 1, 1)).toBe(9);
+    } finally {
+      py.FS.close(stream);
+    }
+  });
 });
 
 describe("files both ways", () => {
@@ -119,11 +108,30 @@ json.dumps(0)
     expect(await readFile(join(root, "renamed-open/after.txt"), "utf8")).toBe("one two");
   });
 
+  it("keeps following a file that is renamed while it is open, when it is then changed through its descriptor", async () => {
+    const dir = await directory("renamed-changed");
+    python(`
+file = open("${dir}/before.txt", "w")
+file.write("0123456789")
+file.flush()
+os.rename("${dir}/before.txt", "${dir}/after.txt")
+file.truncate(4)
+os.fchmod(file.fileno(), 0o600)
+file.close()
+json.dumps(0)
+`);
+    expect(await readdir(join(root, "renamed-changed"))).toEqual(["after.txt"]);
+    expect(await readFile(join(root, "renamed-changed/after.txt"), "utf8")).toBe("0123");
+    expect((await stat(join(root, "renamed-changed/after.txt"))).mode & 0o777).toBe(0o600);
+  });
+
   it("lists a directory without the . and .. entries the host adds, including files Linux created", async () => {
     const dir = await directory("listing");
     await writeFile(join(root, "listing/native-a"), "");
     await mkdir(join(root, "listing/native-dir"));
     expect(python(`json.dumps(sorted(os.listdir("${dir}")))`)).toEqual(["native-a", "native-dir"]);
+    // Python hides the two entries; Emscripten's own listing carries each of them exactly once.
+    expect([...py.FS.readdir(dir)].sort()).toEqual([".", "..", "native-a", "native-dir"]);
     expect(python(`json.dumps(sorted(entry.name for entry in os.scandir("${dir}") if entry.is_dir()))`)).toEqual(["native-dir"]);
   });
 
@@ -247,6 +255,25 @@ json.dumps([written, rest])
     expect((await stat(join(root, "write-limit/data"))).size).toBe(MAX_TRANSFER_BYTES + 5);
   });
 
+  it("never lets a host answer that is longer than the request spill past the region Emscripten lent", async () => {
+    const dir = await directory("long-answer");
+    await writeFile(join(root, "long-answer/data"), "0123456789");
+    const stream = py.FS.open(`${dir}/data`, "r");
+    const operations: unknown = Reflect.get(stream, "stream_ops");
+    const read: unknown = Reflect.get(typeof operations === "object" && operations !== null ? operations : {}, "read");
+    if (typeof read !== "function") throw new Error("the stream has no read operation");
+    const lent = new Uint8Array(8).fill(0xaa);
+    faults.reply = count => new Uint8Array(count + 4).fill(0x55);
+    try {
+      // The four bytes at offset 2 are the region Emscripten lent; the host says six.
+      expect(Reflect.apply(read, operations, [stream, lent, 2, 4, 0])).toBe(4);
+      expect([...lent]).toEqual([0xaa, 0xaa, 0x55, 0x55, 0x55, 0x55, 0xaa, 0xaa]);
+    } finally {
+      delete faults.reply;
+      py.FS.close(stream);
+    }
+  });
+
   it("moves at most the transfer limit in one host call", async () => {
     const dir = await directory("limit");
     await writeFile(join(root, "limit/data"), Buffer.alloc(MAX_TRANSFER_BYTES + 5, 1));
@@ -348,109 +375,6 @@ json.dumps({
     expect(seen).toEqual({ text: "through the link", target: "target.txt", islink: [true, false], lstat_link: true, stat_file: true });
     expect(await readlink(join(root, "links/made"))).toBe("target.txt");
     expect((await lstat(join(root, "links/made"))).isSymbolicLink()).toBe(true);
-  });
-});
-
-describe("file times", () => {
-  const SECOND = 1_000_000_000n;
-
-  it("hands the host the exact milliseconds of both times, for the file that is named", async () => {
-    const dir = await directory("times");
-    await writeFile(join(root, "times/file"), "x");
-    host.utimes.length = 0;
-    python(`
-os.utime("${dir}/file", ns=(1_700_000_000_123_000_000, 1_600_000_000_456_000_000))
-json.dumps(0)
-`);
-    expect(host.utimes).toEqual([{ path: `${dir}/file`, access: new Date(1_700_000_000_123), modification: new Date(1_600_000_000_456), followLinks: true }]);
-    const real = await stat(join(root, "times/file"), { bigint: true });
-    // Node writes times as floating-point seconds, so the machine's own file can be a few hundred nanoseconds off.
-    expect(real.mtimeNs / 1_000_000n).toBeGreaterThanOrEqual(1_600_000_000_455n);
-    expect(real.mtimeNs / SECOND).toBe(1_600_000_000n);
-    expect(real.atimeNs / SECOND).toBe(1_700_000_000n);
-  });
-
-  it("follows a symbolic link to the file it points at", async () => {
-    const dir = await directory("times-link");
-    await writeFile(join(root, "times-link/target"), "x");
-    await symlink("target", join(root, "times-link/link"));
-    host.utimes.length = 0;
-    python(`
-os.utime("${dir}/link", ns=(2_000_000_000_001_000_000, 2_000_000_000_002_000_000))
-json.dumps(0)
-`);
-    expect(host.utimes).toEqual([{ path: `${dir}/target`, access: new Date(2_000_000_000_001), modification: new Date(2_000_000_000_002), followLinks: true }]);
-  });
-
-  it("sets both times to the present when Python gives none", async () => {
-    const dir = await directory("times-now");
-    await writeFile(join(root, "times-now/file"), "x");
-    host.utimes.length = 0;
-    const before = Date.now();
-    python(`os.utime("${dir}/file", None)\njson.dumps(0)`);
-    const [call] = host.utimes;
-    expect(host.utimes).toHaveLength(1);
-    for (const time of [call?.access, call?.modification]) {
-      expect(time).toBeInstanceOf(Date);
-      expect(time instanceof Date ? time.getTime() : 0).toBeGreaterThanOrEqual(before - 1000);
-      expect(time instanceof Date ? time.getTime() : 0).toBeLessThanOrEqual(Date.now() + 1000);
-    }
-  });
-
-  it("leaves a time unchanged when Emscripten says to omit it", async () => {
-    const dir = await directory("times-omit");
-    await writeFile(join(root, "times-omit/file"), "x");
-    host.utimes.length = 0;
-    const utime: unknown = Reflect.get(py.FS, "utime");
-    if (typeof utime !== "function") throw new Error("Emscripten's FS.utime is missing");
-    Reflect.apply(utime, py.FS, [`${dir}/file`, null, 5_000]);
-    Reflect.apply(utime, py.FS, [`${dir}/file`, 6_000.9, null]);
-    expect(host.utimes).toEqual([
-      { path: `${dir}/file`, access: "omit", modification: new Date(5_000), followLinks: true },
-      { path: `${dir}/file`, access: new Date(6_000), modification: "omit", followLinks: true },
-    ]);
-  });
-
-  it("refuses a time that is not a number of milliseconds with EINVAL, before asking the host", async () => {
-    const dir = await directory("times-invalid");
-    await writeFile(join(root, "times-invalid/file"), "x");
-    host.utimes.length = 0;
-    const utime: unknown = Reflect.get(py.FS, "utime");
-    if (typeof utime !== "function") throw new Error("Emscripten's FS.utime is missing");
-    const refused: unknown[] = [];
-    for (const bad of ["yesterday", Number.NaN, Number.POSITIVE_INFINITY, 8.64e15 + 1, -8.64e15 - 1, {}, 10n]) {
-      try {
-        Reflect.apply(utime, py.FS, [`${dir}/file`, bad, 0]);
-        refused.push("accepted");
-      } catch (error: unknown) {
-        refused.push(field(error, "errno"));
-      }
-    }
-    expect(refused).toEqual([28, 28, 28, 28, 28, 28, 28]);
-    expect(host.utimes).toEqual([]);
-  });
-
-  it("reaches Python as the OSError of the host's failure", async () => {
-    const dir = await directory("times-failure");
-    await writeFile(join(root, "times-failure/file"), "x");
-    faults.utimes = () => { throw new LinuxError(1); };
-    try {
-      expect(python(`json.dumps(failure(lambda: os.utime("${dir}/file", (1, 1))))`)).toMatchObject({ class: "PermissionError", name: "EPERM" });
-    } finally {
-      delete faults.utimes;
-    }
-  });
-
-  it("is applied after a size that comes in the same request, so that an explicit time is the one that remains", async () => {
-    const dir = await directory("times-order");
-    await writeFile(join(root, "times-order/file"), "0123456789");
-    host.calls.length = 0;
-    const node = py.FS.lookupPath(`${dir}/file`, {}).node;
-    const operations: unknown = Reflect.get(node, "node_ops");
-    const setattr: unknown = Reflect.get(typeof operations === "object" && operations !== null ? operations : {}, "setattr");
-    if (typeof setattr !== "function") throw new Error("the node has no setattr");
-    Reflect.apply(setattr, operations, [node, { mode: 0o600, size: 3, atime: 5_000, mtime: 6_000 }]);
-    expect(host.calls).toEqual([`chmod ${dir}/file`, `truncate ${dir}/file 3`, `utimes ${dir}/file`]);
   });
 });
 
@@ -617,5 +541,19 @@ json.dumps(0)
 `);
     expect(host.calls.filter(call => call === `open ${dir}/one`)).toHaveLength(1);
     expect(python(`json.dumps(failure(lambda: os.open("${dir}/one", os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)))`)).toMatchObject({ class: "FileExistsError", name: "EEXIST" });
+  });
+
+  it("refuses to reuse a file that Linux created while Python was creating it, and leaves that file as it is", async () => {
+    const dir = await directory("create-race");
+    // Emscripten has looked the name up and found nothing; the host opens the file only when the mode arrives.
+    faults.beforeOpen = path => {
+      if (path === `${dir}/raced`) writeFileSync(join(root, "create-race/raced"), "from Linux");
+    };
+    try {
+      expect(python(`json.dumps(failure(lambda: open("${dir}/raced", "w")))`)).toMatchObject({ class: "FileExistsError", name: "EEXIST" });
+    } finally {
+      delete faults.beforeOpen;
+    }
+    expect(await readFile(join(root, "create-race/raced"), "utf8")).toBe("from Linux");
   });
 });
