@@ -25,7 +25,7 @@ const reported: unknown[] = [];
 /** The sizes of the writes that reached the host. */
 const writeSizes: number[] = [];
 /** Operations that fail or answer differently, switched on for one test. */
-const faults: { lstat?: (path: string) => ReturnType<SyncFiles["lstat"]>; read?: () => never } = {};
+const faults: { lstat?: (path: string) => ReturnType<SyncFiles["lstat"]>; read?: () => never; utimes?: () => never } = {};
 
 const PRELUDE = `import errno, hashlib, json, os
 def failure(operation):
@@ -57,6 +57,7 @@ beforeAll(async () => {
     lstat: path => (faults.lstat === undefined ? host.files.lstat(path) : faults.lstat(typeof path === "string" ? path : "")),
     read: (fd, count) => { if (faults.read !== undefined) faults.read(); return host.files.read(fd, count); },
     write: (fd, bytes) => { writeSizes.push(bytes.length); return host.files.write(fd, bytes); },
+    utimes: (path, access, modification, options) => { if (faults.utimes !== undefined) faults.utimes(); host.files.utimes(path, access, modification, options); },
   };
   py = await startPyodide();
   mountWorkspace(py.FS, files, errno, error => reported.push(error));
@@ -350,6 +351,109 @@ json.dumps({
   });
 });
 
+describe("file times", () => {
+  const SECOND = 1_000_000_000n;
+
+  it("hands the host the exact milliseconds of both times, for the file that is named", async () => {
+    const dir = await directory("times");
+    await writeFile(join(root, "times/file"), "x");
+    host.utimes.length = 0;
+    python(`
+os.utime("${dir}/file", ns=(1_700_000_000_123_000_000, 1_600_000_000_456_000_000))
+json.dumps(0)
+`);
+    expect(host.utimes).toEqual([{ path: `${dir}/file`, access: new Date(1_700_000_000_123), modification: new Date(1_600_000_000_456), followLinks: true }]);
+    const real = await stat(join(root, "times/file"), { bigint: true });
+    // Node writes times as floating-point seconds, so the machine's own file can be a few hundred nanoseconds off.
+    expect(real.mtimeNs / 1_000_000n).toBeGreaterThanOrEqual(1_600_000_000_455n);
+    expect(real.mtimeNs / SECOND).toBe(1_600_000_000n);
+    expect(real.atimeNs / SECOND).toBe(1_700_000_000n);
+  });
+
+  it("follows a symbolic link to the file it points at", async () => {
+    const dir = await directory("times-link");
+    await writeFile(join(root, "times-link/target"), "x");
+    await symlink("target", join(root, "times-link/link"));
+    host.utimes.length = 0;
+    python(`
+os.utime("${dir}/link", ns=(2_000_000_000_001_000_000, 2_000_000_000_002_000_000))
+json.dumps(0)
+`);
+    expect(host.utimes).toEqual([{ path: `${dir}/target`, access: new Date(2_000_000_000_001), modification: new Date(2_000_000_000_002), followLinks: true }]);
+  });
+
+  it("sets both times to the present when Python gives none", async () => {
+    const dir = await directory("times-now");
+    await writeFile(join(root, "times-now/file"), "x");
+    host.utimes.length = 0;
+    const before = Date.now();
+    python(`os.utime("${dir}/file", None)\njson.dumps(0)`);
+    const [call] = host.utimes;
+    expect(host.utimes).toHaveLength(1);
+    for (const time of [call?.access, call?.modification]) {
+      expect(time).toBeInstanceOf(Date);
+      expect(time instanceof Date ? time.getTime() : 0).toBeGreaterThanOrEqual(before - 1000);
+      expect(time instanceof Date ? time.getTime() : 0).toBeLessThanOrEqual(Date.now() + 1000);
+    }
+  });
+
+  it("leaves a time unchanged when Emscripten says to omit it", async () => {
+    const dir = await directory("times-omit");
+    await writeFile(join(root, "times-omit/file"), "x");
+    host.utimes.length = 0;
+    const utime: unknown = Reflect.get(py.FS, "utime");
+    if (typeof utime !== "function") throw new Error("Emscripten's FS.utime is missing");
+    Reflect.apply(utime, py.FS, [`${dir}/file`, null, 5_000]);
+    Reflect.apply(utime, py.FS, [`${dir}/file`, 6_000.9, null]);
+    expect(host.utimes).toEqual([
+      { path: `${dir}/file`, access: "omit", modification: new Date(5_000), followLinks: true },
+      { path: `${dir}/file`, access: new Date(6_000), modification: "omit", followLinks: true },
+    ]);
+  });
+
+  it("refuses a time that is not a number of milliseconds with EINVAL, before asking the host", async () => {
+    const dir = await directory("times-invalid");
+    await writeFile(join(root, "times-invalid/file"), "x");
+    host.utimes.length = 0;
+    const utime: unknown = Reflect.get(py.FS, "utime");
+    if (typeof utime !== "function") throw new Error("Emscripten's FS.utime is missing");
+    const refused: unknown[] = [];
+    for (const bad of ["yesterday", Number.NaN, Number.POSITIVE_INFINITY, 8.64e15 + 1, -8.64e15 - 1, {}, 10n]) {
+      try {
+        Reflect.apply(utime, py.FS, [`${dir}/file`, bad, 0]);
+        refused.push("accepted");
+      } catch (error: unknown) {
+        refused.push(field(error, "errno"));
+      }
+    }
+    expect(refused).toEqual([28, 28, 28, 28, 28, 28, 28]);
+    expect(host.utimes).toEqual([]);
+  });
+
+  it("reaches Python as the OSError of the host's failure", async () => {
+    const dir = await directory("times-failure");
+    await writeFile(join(root, "times-failure/file"), "x");
+    faults.utimes = () => { throw new LinuxError(1); };
+    try {
+      expect(python(`json.dumps(failure(lambda: os.utime("${dir}/file", (1, 1))))`)).toMatchObject({ class: "PermissionError", name: "EPERM" });
+    } finally {
+      delete faults.utimes;
+    }
+  });
+
+  it("is applied after a size that comes in the same request, so that an explicit time is the one that remains", async () => {
+    const dir = await directory("times-order");
+    await writeFile(join(root, "times-order/file"), "0123456789");
+    host.calls.length = 0;
+    const node = py.FS.lookupPath(`${dir}/file`, {}).node;
+    const operations: unknown = Reflect.get(node, "node_ops");
+    const setattr: unknown = Reflect.get(typeof operations === "object" && operations !== null ? operations : {}, "setattr");
+    if (typeof setattr !== "function") throw new Error("the node has no setattr");
+    Reflect.apply(setattr, operations, [node, { mode: 0o600, size: 3, atime: 5_000, mtime: 6_000 }]);
+    expect(host.calls).toEqual([`chmod ${dir}/file`, `truncate ${dir}/file 3`, `utimes ${dir}/file`]);
+  });
+});
+
 describe("special files", () => {
   it("lists and describes a directory that holds a Unix socket, so that Python can import from it", async () => {
     // Service sockets live beside the programs that use them, and `python script.py` puts the script's directory on sys.path.
@@ -433,7 +537,6 @@ json.dumps({
   it("reports an operation the host cannot do as not supported", async () => {
     const dir = await directory("unsupported");
     await writeFile(join(root, "unsupported/file"), "");
-    expect(python(`json.dumps(failure(lambda: os.utime("${dir}/file", (1, 1))))`)).toMatchObject({ name: "ENOTSUP" });
     // Creating a special file is refused (Python has no os.mknod here, so this goes to Emscripten's file system directly),
     // although a directory may hold one that something else made.
     let refused: unknown;

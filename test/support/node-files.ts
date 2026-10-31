@@ -5,13 +5,24 @@ import { LinuxError } from "@oxidevm/sdk/js-process";
 import { kit } from "@oxidevm/sdk/wasm";
 import type { FileDescriptor, SyncFiles } from "../../src/host-types.ts";
 
+type LinuxTimestamp = Parameters<SyncFiles["utimes"]>[1];
+
 /**
  * A stand-in for the VM's synchronous file API that works on a directory of the test machine: `/workspace` is `root`.
  * It fails the way the host does, with a `LinuxError` that carries the Linux errno, and it keeps file positions the
  * way a file descriptor does, because Node has no `lseek`.
  */
+export interface UtimesCall {
+  readonly path: string;
+  readonly access: LinuxTimestamp;
+  readonly modification: LinuxTimestamp;
+  readonly followLinks: boolean;
+}
+
 export interface NodeFiles {
   readonly files: SyncFiles;
+  /** Every `utimes` call made, with the times exactly as the host was given them. */
+  readonly utimes: UtimesCall[];
   /** The real path behind a VM path. */
   readonly real: (path: string) => string;
   /** How many descriptors are still open. */
@@ -33,6 +44,7 @@ function asDescriptor(value: number): FileDescriptor {
 
 export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "writeAll">): NodeFiles {
   const calls: string[] = [];
+  const utimes: UtimesCall[] = [];
   const positions = new Map<number, number>();
 
   function real(path: string): string {
@@ -110,6 +122,18 @@ export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "wri
     fchmod(fd, mode) { guard(() => { nodeFs.fchmodSync(fd, mode & 0o7777); }); },
     truncate(path, length) { calls.push(`truncate ${text(path)} ${String(length)}`); guard(() => { nodeFs.truncateSync(real(text(path)), Number(length)); }); },
     ftruncate(fd, length) { guard(() => { nodeFs.ftruncateSync(fd, Number(length)); }); },
+    utimes(path, access, modification, options) {
+      const followLinks = options?.followLinks !== false;
+      calls.push(`utimes ${text(path)}`);
+      utimes.push({ path: text(path), access, modification, followLinks });
+      guard(() => {
+        const target = real(text(path));
+        const current = followLinks ? nodeFs.statSync(target) : nodeFs.lstatSync(target);
+        const resolve = (time: LinuxTimestamp, existing: Date): Date => (time === "now" ? new Date() : time === "omit" ? existing : time);
+        const set = followLinks ? nodeFs.utimesSync : nodeFs.lutimesSync;
+        set(target, resolve(access, current.atime), resolve(modification, current.mtime));
+      });
+    },
     link(from, to) { guard(() => { nodeFs.linkSync(real(text(from)), real(text(to))); }); },
     symlink(target, path) { calls.push(`symlink ${text(path)}`); guard(() => { nodeFs.symlinkSync(text(target), real(text(path))); }); },
     readlink: path => guard(() => nodeFs.readlinkSync(real(text(path)))),
@@ -124,7 +148,7 @@ export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "wri
     dup() { throw new LinuxError(38); },
     pipe() { throw new LinuxError(38); },
   };
-  return { files, real, openDescriptors: () => positions.size, calls };
+  return { files, utimes, real, openDescriptors: () => positions.size, calls };
 }
 
 /** The real kit's errno helpers, so that tests map errors exactly as the runner's host does. */

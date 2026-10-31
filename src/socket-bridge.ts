@@ -123,7 +123,8 @@ export function socketBridge(host: SocketHost): SocketBridge {
       const { signal, timedOut } = limit(timeoutMs);
       try {
         for (let offset = 0; offset < data.length;) {
-          const written = await host.sockets.write(fd, data.subarray(offset), { signal });
+          // `noSignal`: a peer that has gone is an EPIPE for Python to raise as BrokenPipeError, not a SIGPIPE that ends the module.
+          const written = await host.sockets.write(fd, data.subarray(offset), { signal, noSignal: true });
           if (written <= 0) throw failureFor("EPIPE");
           offset += written;
         }

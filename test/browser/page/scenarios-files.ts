@@ -84,7 +84,7 @@ print(json.dumps({"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 export async function metadata(context: Context): Promise<string> {
   const { vm } = context;
-  const result = await run(context, `import errno, json, os, shutil
+  const result = await run(context, `import json, os, shutil
 base = "/workspace/meta"
 os.makedirs(base, exist_ok=True)
 with open(base + "/data.bin", "wb") as file:
@@ -95,11 +95,10 @@ with open(base + "/data.bin", "r+b") as file:
     file.truncate(50)
 os.symlink("data.bin", base + "/link.bin")
 shutil.copy(base + "/data.bin", base + "/copy.bin")
-try:
-    os.utime(base + "/data.bin", (1, 1))
-    utime = "ok"
-except OSError as error:
-    utime = type(error).__name__ + ":" + errno.errorcode[error.errno]
+os.utime(base + "/data.bin", ns=(1_700_000_000_123_000_000, 1_600_000_000_456_000_000))
+changed = os.stat(base + "/data.bin")
+os.utime(base + "/link.bin", ns=(1_800_000_000_001_000_000, 1_800_000_000_002_000_000))
+through_link = os.stat(base + "/data.bin")
 print(json.dumps({
     "readlink": os.readlink(base + "/link.bin"),
     "islink": [os.path.islink(base + "/link.bin"), os.path.islink(base + "/data.bin")],
@@ -107,16 +106,23 @@ print(json.dumps({
     "mode": oct(os.stat(base + "/data.bin").st_mode & 0o777),
     "copy_mode": oct(os.stat(base + "/copy.bin").st_mode & 0o777),
     "copy_size": os.path.getsize(base + "/copy.bin"),
-    "utime": utime,
+    "times_ms": [changed.st_atime_ns // 1_000_000, changed.st_mtime_ns // 1_000_000],
+    "times_through_link_ms": [through_link.st_atime_ns // 1_000_000, through_link.st_mtime_ns // 1_000_000],
 }, sort_keys=True))
 `, { name: "metadata", packages: [] });
   expectStatus(result, 0, "metadata run");
   const seen = parsed(result.stdout);
-  same(seen, { copy_mode: "0o640", copy_size: 50, islink: [true, false], mode: "0o640", readlink: "data.bin", size_through_link: 50, utime: "OSError:ENOTSUP" }, "what Python saw");
+  same(seen, {
+    copy_mode: "0o640", copy_size: 50, islink: [true, false], mode: "0o640", readlink: "data.bin", size_through_link: 50,
+    times_ms: [1_700_000_000_123, 1_600_000_000_456], times_through_link_ms: [1_800_000_000_001, 1_800_000_000_002],
+  }, "what Python saw");
   same((await native(vm, "/bin/stat", ["-c", "%a %s", "/workspace/meta/data.bin"])).stdout.trim(), "640 50", "mode and size, seen by Linux");
   same((await native(vm, "/bin/readlink", ["/workspace/meta/link.bin"])).stdout.trim(), "data.bin", "the link Python made, read by Linux");
   same((await native(vm, "/bin/stat", ["-c", "%a %s", "/workspace/meta/copy.bin"])).stdout.trim(), "640 50", "the copy, seen by Linux");
-  return "chmod, truncate, symlink, readlink and shutil.copy reach the VM; os.utime is not supported (ENOTSUP)";
+  // The times Python set through the link are the file's own, to the millisecond, for a Linux program as well.
+  const times = await native(vm, "/bin/stat", ["-c", "%X %Y %y", "/workspace/meta/data.bin"]);
+  check(times.stdout.startsWith("1800000000 1800000000 ") && times.stdout.includes(".002000000"), `Linux sees these times on the file: ${times.stdout}`);
+  return `chmod, truncate, symlink, readlink, shutil.copy and os.utime (through a link too) reach the VM to the millisecond; Linux stat: ${times.stdout.trim()}`;
 }
 
 export async function plot(context: Context): Promise<string> {

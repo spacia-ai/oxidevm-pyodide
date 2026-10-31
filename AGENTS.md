@@ -20,7 +20,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
   `pnpm run notices`.
 - Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`. `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
-- The SDK packages are installed from local tarballs until they are published: keep `package.json` at the version it names,
-  and put the tarball paths in an untracked `pnpm-workspace.yaml` (`overrides:` for `@oxidevm/sdk` and `@oxidevm/cli`, and
-  `allowBuilds: { esbuild: true }`). Do not commit `pnpm-workspace.yaml` or `pnpm-lock.yaml` before the alpha exists.
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.1.0-alpha.301, the `wasm-modules` line, Userspace API
+  144, which `files.sync` and `files.async` need for `utimes`). They come from the private registry: put
+  `@oxidevm:registry=http://127.0.0.1:4873/` in an untracked `.npmrc` (never commit it; the lockfile records no registry). The
+  committed `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's
+  minimum-release-age policy.
 - Release by tag: `pnpm run release` prints the steps.

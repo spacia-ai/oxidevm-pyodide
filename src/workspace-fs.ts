@@ -1,6 +1,8 @@
 import type { PyodideInterface } from "pyodide";
 import type { FileDescriptor, KitErrno, SyncFiles } from "./host-types.ts";
 
+type LinuxTimestamp = Parameters<SyncFiles["utimes"]>[1];
+
 /** Emscripten's file system object, which Pyodide exposes as `pyodide.FS`. */
 export type EmscriptenFS = PyodideInterface["FS"];
 
@@ -47,6 +49,16 @@ export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErr
   function failWith(linuxErrno: number): never {
     throw failure(linuxErrno);
   }
+  function integerOf(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+  }
+  /** A time for the host: milliseconds (or a `Date`) as an instant, `null` or nothing as "leave it unchanged"; anything else is refused. */
+  function timestampOf(value: unknown): LinuxTimestamp {
+    if (value === null || value === undefined) return "omit";
+    const instant = value instanceof Date ? new Date(value.getTime()) : typeof value === "number" ? new Date(value) : undefined;
+    if (instant === undefined || Number.isNaN(instant.getTime())) throw failure(EINVAL);
+    return instant;
+  }
   /** A file offset as the host takes it. Emscripten passes integers; anything else is refused instead of thrown at. */
   function offsetOf(value: number): bigint {
     if (!Number.isSafeInteger(value)) return failWith(EINVAL);
@@ -89,19 +101,24 @@ export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErr
         atime: new Date(Number(stat.accessedNs / 1_000_000n)), mtime: new Date(Number(stat.modifiedNs / 1_000_000n)), ctime: new Date(Number(stat.changedNs / 1_000_000n)),
       };
     }),
-    setattr(node, attributes: Partial<FS.Stats>) {
+    // Emscripten hands over plain numbers (times are milliseconds, or null to leave one unchanged), so every field is decoded.
+    setattr(node, attributes: Readonly<Partial<Record<keyof FS.Stats, unknown>>>) {
       call(() => {
         const { mode, size, atime, mtime } = attributes;
         if (mode !== undefined) {
-          if (creating.has(node)) finishCreating(node, mode);
-          else files.chmod(path(node), mode & PERMISSION_BITS);
+          const bits = integerOf(mode);
+          if (bits === undefined) throw failure(EINVAL);
+          if (creating.has(node)) finishCreating(node, bits);
+          else files.chmod(path(node), bits & PERMISSION_BITS);
         }
-        // Setting access and modification times has no host operation.
-        if (size === undefined && (atime !== undefined || mtime !== undefined)) throw failure(ENOTSUP);
         if (size !== undefined) {
-          if (!Number.isSafeInteger(size) || size < 0) throw failure(EINVAL);
-          files.truncate(path(node), size);
+          const length = integerOf(size);
+          if (length === undefined || length < 0) throw failure(EINVAL);
+          files.truncate(path(node), length);
         }
+        // Last, because truncating changes the modification time and an explicit time must be the one that remains. Emscripten
+        // resolved symbolic links before it got here, so the node is the file itself.
+        if (atime !== undefined || mtime !== undefined) files.utimes(path(node), timestampOf(atime), timestampOf(mtime), { followLinks: true });
       });
     },
     lookup: (parent, name) => call(() => make(parent, name, files.lstat(child(parent, name)).mode)),

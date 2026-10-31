@@ -1,3 +1,4 @@
+import { LinuxError } from "@oxidevm/sdk/js-process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { echoUpperCase } from "./support/fake-sockets.ts";
 import type { Child } from "./support/fake-process.ts";
@@ -180,6 +181,23 @@ def attempt(connect):
 print(attempt(lambda: oxidevm.connect_unix("/workspace/_oxidevm/none.sock")))
 print(attempt(lambda: oxidevm.connect_tcp(6000)))
 `)).toBe("('FileNotFoundError', 'ENOENT', '[Errno 44] No such file or directory')\n('ConnectionRefusedError', 'ECONNREFUSED', '[Errno 14] Connection refused')\n");
+  });
+
+  it("raises BrokenPipeError when the other side has closed the connection", async () => {
+    guest.sockets.listen("tcp:127.0.0.1:7002", peer => { peer.close(); });
+    const original = guest.sockets.sockets.write;
+    guest.sockets.sockets.write = () => Promise.reject(new LinuxError(32));
+    try {
+      expect(await printed(`
+with oxidevm.connect_tcp(7002) as connection:
+    try:
+        connection.sendall(b"hello")
+    except BrokenPipeError as error:
+        print("BrokenPipeError", error.errno == errno.EPIPE)
+`)).toBe("BrokenPipeError True\n");
+    } finally {
+      guest.sockets.sockets.write = original;
+    }
   });
 
   it("times out a connection attempt and, once settimeout is used, a silent read", async () => {

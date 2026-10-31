@@ -186,6 +186,16 @@ describe("sending and receiving", () => {
     expect((await failure(bridge.send(handle, bytes("x"), 0))).code).toBe("EPIPE");
   });
 
+  it("asks the host for EPIPE instead of SIGPIPE when the other side has gone, so that Python gets a BrokenPipeError and the module lives", async () => {
+    const fake = fakeSockets();
+    fake.listen(`unix:${UNIX}`, echoUpperCase());
+    const options: unknown[] = [];
+    const { bridge } = setup({ sockets: { ...fake.sockets, write: (fd, data, given) => { options.push(given?.noSignal); return fake.sockets.write(fd, data, given); } } });
+    const handle = await bridge.connect("unix", UNIX, 0, 1000);
+    await bridge.send(handle, bytes("hello"), 0);
+    expect(options).toEqual([true]);
+  });
+
   it("treats a write that accepts nothing as a broken pipe instead of looping", async () => {
     const fake = fakeSockets();
     fake.listen(`unix:${UNIX}`, echoUpperCase());

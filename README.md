@@ -5,7 +5,8 @@ An [OxideVM](https://oxidevm.dev) WebAssembly module (a command) that runs Pytho
 shares the VM's files, process ids and sockets with real Linux programs: it reads and writes `/workspace` as Linux sees it,
 starts native programs, and talks to services they listen with. pandas and Matplotlib are included.
 
-Status: pre-release `0.1.0`, built on the unpublished `@oxidevm/sdk/wasm` toolchain. See [Known limits](#known-limits).
+Status: pre-release `0.1.0`, built on the `wasm-modules` line of the SDK (0.1.0-alpha.301, Userspace API 144). See
+[Known limits](#known-limits).
 
 ## Use it
 
@@ -49,9 +50,9 @@ about a second.
 - **Standard streams** are the process's descriptors 0, 1 and 2, read and written in UTF-8.
 - **Files.** `/workspace` is the VM's workspace at the same path, through the VM's own file API, so a file Python writes is at
   once the file Linux reads, and the reverse, while both run. Permissions (`open`, `os.mkdir`, `os.chmod`), `rename`,
-  `unlink`, `rmdir`, `readdir`, `truncate`, symbolic links and hard-to-reach special files (a directory with a socket in it
-  still lists and imports) work. One read or write moves at most 16 MiB (larger ones continue in steps), and `os.utime`
-  is not supported (`ENOTSUP`). Everything outside `/workspace` is Pyodide's own in-memory file system.
+  `unlink`, `rmdir`, `readdir`, `truncate`, symbolic links and file times (`os.utime`, to the millisecond) work, and a directory
+  that holds a socket or a pipe still lists and imports. One read or write moves at most 16 MiB (larger ones continue in
+  steps). Creating special files is refused. Everything outside `/workspace` is Pyodide's own in-memory file system.
 - **The process.** `os.getpid()`, `getuid()`, `geteuid()`, `getgid()` and `getegid()` report the module's real Linux process;
   the working directory is the process's (inside the workspace, otherwise `/workspace`); `HOME` is `/workspace`;
   `MPLBACKEND` defaults to `Agg`, because a worker has no display. The rest of the process environment is passed on, except
@@ -90,7 +91,8 @@ with oxidevm.connect_tcp(5432) as connection:             # host defaults to "12
 `Connection` with `sendall`, `recv` (at most 1 MiB per call), `settimeout`, `gettimeout` and `close`, and work in `with`.
 `timeout` limits only the connection attempt. Failures are the `OSError` subclass Python would raise
 (`FileNotFoundError` for a missing socket file, `ConnectionRefusedError` for a socket with no server, `TimeoutError` when a
-timeout runs out). A program may hold 32 sockets open; the module closes any it leaves open when it ends.
+timeout runs out, `BrokenPipeError` when the other side has gone). A program may hold 32 sockets open; the module closes any it
+leaves open when it ends.
 
 ## How it is built and checked
 
@@ -108,7 +110,7 @@ installs inside Python are out of scope.
 
 ## Known limits
 
-- `os.utime` and the other ways to set file times are unsupported (the VM's API has no such operation).
+- File times are kept to the millisecond (the VM's API takes a `Date`), and `os.utime` follows symbolic links.
 - Python threads, `subprocess`, `multiprocessing` and other things Emscripten cannot do are what they are in Pyodide;
   `oxidevm.run` is how to start a native program.
 - The module cancels cleanly when its process group is killed (`process.kill("SIGKILL", { scope: "process-group" })`); a
@@ -121,7 +123,8 @@ installs inside Python are out of scope.
 
 ## Develop it
 
-The SDK packages this repository depends on are not published yet; install them from local tarballs (see `AGENTS.md`).
+`@oxidevm/sdk` and `@oxidevm/cli` come from the private registry's `wasm-modules` dist-tag: put
+`@oxidevm:registry=http://127.0.0.1:4873/` in an untracked `.npmrc` first (see `AGENTS.md`).
 
 ```sh
 pnpm install

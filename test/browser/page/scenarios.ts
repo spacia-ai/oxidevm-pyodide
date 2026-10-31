@@ -31,7 +31,7 @@ const SCENARIOS: readonly Scenario[] = [
   ["a file altered after staging is refused before any module code runs (exit 121)", tamperedArtifact],
   ["files are shared both ways with native Linux, permissions included, while the module runs", filesBothWays],
   ["files of 20 MiB cross the module's transfer limit in both directions", largeFiles],
-  ["chmod, truncate, symlink and shutil.copy reach the VM's files", metadata],
+  ["chmod, truncate, symlink, shutil.copy and utime reach the VM's files", metadata],
   ["oxidevm.run runs native programs with input, status, timeout and output bounds", nativeRun],
   ["cancelling the module retires its native child in under 5 seconds", cancellation],
   ["matplotlib writes a valid PNG that Linux recognises", plot],
