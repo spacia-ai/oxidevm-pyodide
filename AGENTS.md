@@ -18,6 +18,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
 - The mirrored upstream files in `upstream/` are not committed. `pnpm run fetch-upstream` downloads and verifies them; add a
   wheel by adding it to `upstream/lock.json`, `module.ts`, `src/shipped.ts` and `scripts/notices.ts` (RECORDED), then run
   `pnpm run notices`.
+- Tests that mount the file system bridge use `test/support/workspace-fixture.ts`; tests of the Python side use
+  `test/support/guest-fixture.ts`. Keep each test file near 600 lines, and when a behaviour is guarded by a branch, write the
+  test that fails without it (a round of 89 one-line mutations of `src/` found 15 branches that no test guarded).
 - Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`. `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
 - `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.1.0-alpha.301, the `wasm-modules` line, Userspace API
