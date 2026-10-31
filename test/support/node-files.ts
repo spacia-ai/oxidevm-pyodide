@@ -31,7 +31,7 @@ function asDescriptor(value: number): FileDescriptor {
   return value;
 }
 
-export function nodeFiles(root: string): NodeFiles {
+export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "writeAll">): NodeFiles {
   const calls: string[] = [];
   const positions = new Map<number, number>();
 
@@ -70,6 +70,7 @@ export function nodeFiles(root: string): NodeFiles {
       guard(() => { nodeFs.closeSync(fd); });
     },
     read(fd, count) {
+      if (fd <= 2 && standard !== undefined) return standard.read(fd, count);
       const position = positions.get(fd) ?? 0;
       const buffer = Buffer.alloc(count);
       const read = guard(() => nodeFs.readSync(fd, buffer, 0, count, position));
@@ -83,6 +84,7 @@ export function nodeFiles(root: string): NodeFiles {
       return written;
     },
     writeAll(fd, bytes) {
+      if (fd <= 2 && standard !== undefined) { standard.writeAll(fd, bytes); return; }
       let offset = 0;
       while (offset < bytes.length) offset += files.write(fd, bytes.subarray(offset));
     },
