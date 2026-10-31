@@ -5,7 +5,7 @@ An [OxideVM](https://oxidevm.dev) WebAssembly module (a command) that runs Pytho
 shares the VM's files, process ids and sockets with real Linux programs: it reads and writes `/workspace` as Linux sees it,
 starts native programs, and talks to services they listen with. pandas and Matplotlib are included.
 
-Status: pre-release `0.1.0`, built on the `wasm-modules` line of the SDK (0.1.0-alpha.301, Userspace API 144). See
+Status: pre-release `0.1.0`, built on the `wasm-modules` line of the SDK (0.1.0-alpha.303, Userspace API 144). See
 [Known limits](#known-limits).
 
 ## Use it

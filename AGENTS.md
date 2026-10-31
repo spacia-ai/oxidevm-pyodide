@@ -23,7 +23,7 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
   test that fails without it (a round of 89 one-line mutations of `src/` found 15 branches that no test guarded).
 - Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`. `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.1.0-alpha.301, the `wasm-modules` line, Userspace API
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.1.0-alpha.303, the `wasm-modules` line, Userspace API
   144, which `files.sync` and `files.async` need for `utimes`). They come from the private registry: put
   `@oxidevm:registry=http://127.0.0.1:4873/` in an untracked `.npmrc` (never commit it; the lockfile records no registry). The
   committed `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's
