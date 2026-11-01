@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { kit } from "@oxidevm/sdk/wasm";
@@ -6,11 +6,13 @@ import type { NativeRunRequest } from "@oxidevm/sdk/wasm";
 import type { PyodideInterface } from "pyodide";
 import { installGuest } from "../../src/guest.ts";
 import { nativeRunner } from "../../src/native-bridge.ts";
-import { invocationOf, pythonEnvironment, runScript } from "../../src/script.ts";
+import { parseCommandLine } from "../../src/cli.ts";
+import { prepareProgram, pythonEnvironment, runProgram } from "../../src/script.ts";
+import type { Launch } from "../../src/script.ts";
 import { socketBridge } from "../../src/socket-bridge.ts";
 import type { SocketBridge } from "../../src/socket-bridge.ts";
 import { attachStandardStreams } from "../../src/stdio.ts";
-import { mountTree, WORKSPACE } from "../../src/workspace-fs.ts";
+import { mountTree, TMP, WORKSPACE } from "../../src/workspace-fs.ts";
 import { fakeProcess } from "./fake-process.ts";
 import type { Child, FakeProcess } from "./fake-process.ts";
 import { fakeSockets } from "./fake-sockets.ts";
@@ -32,6 +34,14 @@ export interface RunResult {
   readonly stderr: string;
 }
 
+/** How a command line is started: from which directory, with what on standard input, under which name. */
+export interface CommandLineOptions {
+  readonly cwd?: string;
+  readonly stdin?: string;
+  readonly argv0?: string;
+  readonly executable?: string;
+}
+
 /**
  * A Pyodide that is set up the way the command sets it up (workspace mounted, standard streams attached, the `oxidevm`
  * module and the process identity installed), in Node, against fakes of the VM's files, processes and sockets.
@@ -48,17 +58,25 @@ export interface GuestFixture {
   readonly socketRequests: SocketRequest[];
   /** Ends the module the way the runner does when `main` returns: aborts its signal and closes leftover sockets. */
   readonly stop: () => Promise<void>;
-  /** Writes `source` to a script in the workspace and runs it as `main` would. */
+  /** Writes `source` to a script in the workspace and runs it as `python3 /workspace/<name> args...` would. */
   run(source: string, options?: { readonly args?: readonly string[]; readonly name?: string; readonly stdin?: string }): Promise<RunResult>;
+  /**
+   * Runs a command line the way `main` does once Python has started: the parser's warnings and a program that cannot be
+   * read are reported on standard error (as `host.fail` does), anything else runs in this Pyodide.
+   */
+  runCommandLine(args: readonly string[], options?: CommandLineOptions): Promise<RunResult>;
   dispose(): Promise<void>;
 }
 
 export const IDENTITY = { pid: 4242, uid: 1000, gid: 1001, cwd: "/workspace" } as const;
 
+/** The workspace and /tmp of the VM, each a directory of the test machine. */
 export async function startGuest(behave: (argv: readonly string[]) => Child = () => ({})): Promise<GuestFixture> {
   const root = await mkdtemp(join(tmpdir(), "pyodide-guest-"));
-  const files = nodeFiles(root);
+  await mkdir(join(root, "workspace"));
+  await mkdir(join(root, "tmp"));
   const stdio = fakeStdio();
+  const files = nodeFiles({ [WORKSPACE]: join(root, "workspace"), [TMP]: join(root, "tmp") }, stdio.files);
   const process = fakeProcess(behave);
   const sockets = fakeSockets();
   const lifetime = new AbortController();
@@ -73,23 +91,36 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     recv: (handle, size, timeoutMs) => { socketRequests.push({ operation: "recv", timeoutMs, size }); return realSockets.recv(handle, size, timeoutMs); },
   };
   const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets };
-  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar" }));
-  mountTree(py.FS, files.files, kit.errno, WORKSPACE);
+  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }));
+  for (const tree of [WORKSPACE, TMP]) mountTree(py.FS, files.files, kit.errno, tree);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
   installGuest(py, IDENTITY, bridges);
 
+  async function runCommandLine(args: readonly string[], options: CommandLineOptions = {}): Promise<RunResult> {
+    const launch: Launch = { argv0: options.argv0 ?? "python3", args, cwd: options.cwd ?? IDENTITY.cwd, executable: options.executable ?? "/usr/local/bin/python3" };
+    stdio.take();
+    stdio.feed(options.stdin ?? "");
+    const line = parseCommandLine(args);
+    if (line.kind !== "run") throw new Error(`${args.join(" ")} is not a program to run`);
+    const report = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
+    line.warnings.forEach(report);
+    const prepared = prepareProgram({ fs: files.files, errnoOf: kit.errno.of, stdin: stdio.streams.stdin }, launch, line);
+    if (prepared.kind === "failed") {
+      report(prepared.message);
+      return { status: prepared.status, ...stdio.take() };
+    }
+    py.FS.chdir(launch.cwd);
+    const status = await runProgram(py, prepared.request);
+    return { status, ...stdio.take() };
+  }
+
   return {
-    py, files, process, sockets, stdio, nativeRequests, socketRequests,
+    py, files, process, sockets, stdio, nativeRequests, socketRequests, runCommandLine,
     stop: async () => { lifetime.abort(); await realSockets.closeAll(); },
     async run(source, options = {}) {
       const name = options.name ?? "program.py";
-      await writeFile(join(root, name), source);
-      stdio.take();
-      stdio.feed(options.stdin ?? "");
-      const invocation = invocationOf([`/workspace/${name}`, ...(options.args ?? [])], "/workspace");
-      if (invocation === undefined) throw new Error("no invocation");
-      const status = await runScript(py, invocation, source);
-      return { status, ...stdio.take() };
+      await writeFile(files.real(`/workspace/${name}`), source);
+      return runCommandLine([`/workspace/${name}`, ...(options.args ?? [])], options.stdin === undefined ? {} : { stdin: options.stdin });
     },
     dispose: () => rm(root, { recursive: true, force: true }),
   };

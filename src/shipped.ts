@@ -21,6 +21,10 @@ export const WHEELS = {
   six: "six-1.17.0-py2.py3-none-any.whl",
 } as const;
 
+/** The commands the module declares (`commands` in the manifest, sorted): both run Python, and argv[0] says which was typed. */
+export const COMMANDS = ["python", "python3"] as const;
+export type PythonCommand = (typeof COMMANDS)[number];
+
 /** The notices the release carries (`license.notices` in the manifest). */
 export const NOTICE_FILES = ["NOTICES.txt", "SOURCE-OFFER.md"] as const;
 

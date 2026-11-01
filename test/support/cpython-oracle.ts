@@ -89,3 +89,18 @@ export function oracleCase(name: string): OracleCase {
 export function normalised(recorded: string, module: { readonly executable: string; readonly version: string }): string {
   return recorded.replaceAll(oracle.provenance.executable, module.executable).replaceAll(`Python ${oracle.provenance.version}`, `Python ${module.version}`);
 }
+
+/** What CPython's option parser did with a case, read from the recording rather than from the module's parser. */
+export type RecordedOutcome = "version" | "help" | "usage-error" | "run";
+
+export function recordedOutcome(recorded: OracleCase): RecordedOutcome {
+  if (/^(Unknown option|Argument expected)/u.test(recorded.stderr) && recorded.stderr.includes(`\nusage: ${oracle.provenance.argv0} `)) return "usage-error";
+  if (recorded.exit.kind === "exited" && recorded.exit.code === 0 && /^Python \d+\.\d+\.\d+\n$/u.test(recorded.stdout)) return "version";
+  if (recorded.exit.kind === "exited" && recorded.exit.code === 0 && recorded.stdout.startsWith("usage: ")) return "help";
+  return "run";
+}
+
+/** The recorded programs, by their VM path (under /tmp, where the recording ran). */
+export function oracleFiles(): readonly (readonly [path: string, text: string])[] {
+  return Object.entries(oracle.files).map(([name, text]) => [`${oracle.provenance.cwd}/${name}`, text]);
+}

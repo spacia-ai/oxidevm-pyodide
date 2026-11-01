@@ -4,7 +4,7 @@ import { createCommand } from "./src/command.ts";
 export default defineModule({
   manifest: {
     id: "pyodide",
-    version: "0.1.0",
+    version: "0.2.0",
     abi: "emscripten",
     artifacts: [
       { name: "pyodide.asm.wasm", from: "upstream/pyodide.asm.wasm" },
@@ -27,6 +27,7 @@ export default defineModule({
       { name: "SOURCE-OFFER.md", from: "SOURCE-OFFER.md" },
     ],
     process: { kind: "command" },
+    commands: ["python", "python3"],
     requires: {
       host: ["files.async", "files.sync", "process.info", "process.spawn", "sockets.connect"],
       browser: ["cross-origin-isolated", "jspi"],

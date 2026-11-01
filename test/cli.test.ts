@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { helpText, interactiveRefusal, parseCommandLine, PYTHON_VERSION, usageError, versionText } from "../src/cli.ts";
 import type { CommandLine } from "../src/cli.ts";
 import { field } from "./support/decode.ts";
-import { normalised, oracle } from "./support/cpython-oracle.ts";
+import { normalised, oracle, recordedOutcome } from "./support/cpython-oracle.ts";
 import type { OracleCase } from "./support/cpython-oracle.ts";
 
 // The parser against what real CPython 3.14 did with the same command lines (test/fixtures/cpython-cli.json, recorded
@@ -14,16 +14,6 @@ import type { OracleCase } from "./support/cpython-oracle.ts";
 
 const ARGV0 = oracle.provenance.argv0;
 const MODULE = { executable: "/usr/local/bin/python3", version: PYTHON_VERSION };
-
-type Expected = "version" | "help" | "usage-error" | "run";
-
-/** What CPython's own option parser did, read from the recording rather than from the module's parser. */
-function recordedOutcome(recorded: OracleCase): Expected {
-  if (/^(Unknown option|Argument expected)/u.test(recorded.stderr) && recorded.stderr.includes(`\nusage: ${ARGV0} `)) return "usage-error";
-  if (recorded.exit.kind === "exited" && recorded.exit.code === 0 && /^Python \d+\.\d+\.\d+\n$/u.test(recorded.stdout)) return "version";
-  if (recorded.exit.kind === "exited" && recorded.exit.code === 0 && recorded.stdout.startsWith("usage: ")) return "help";
-  return "run";
-}
 
 /** The probe's report of how it was started, when the case ran the probe. */
 function probeReport(recorded: OracleCase): unknown {

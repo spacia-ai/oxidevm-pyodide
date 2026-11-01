@@ -1,34 +1,75 @@
-import type { CommandHooks } from "@oxidevm/sdk/wasm";
+import type { CommandHooks, CommandIO } from "@oxidevm/sdk/wasm";
+import { helpText, interactiveRefusal, parseCommandLine, usageError, versionText } from "./cli.ts";
+import type { CommandLine } from "./cli.ts";
 import { guestProcess } from "./identity.ts";
 import { installGuest } from "./guest.ts";
 import type { CommandHost } from "./host-types.ts";
 import { nativeRunner } from "./native-bridge.ts";
 import { bundledEngine, loadPython } from "./python-loader.ts";
 import type { Engine } from "./python-loader.ts";
-import { invocationOf, pythonEnvironment, readScript, runScript, USAGE } from "./script.ts";
+import { HOST_ARGV0, placementRefusal, prepareProgram, pythonEnvironment, runProgram } from "./script.ts";
+import type { Launch } from "./script.ts";
+import type { PythonCommand } from "./shipped.ts";
 import { socketBridge } from "./socket-bridge.ts";
 import { attachStandardStreams } from "./stdio.ts";
-import { mountTree, WORKSPACE } from "./workspace-fs.ts";
+import { mountTree, visibleTrees } from "./workspace-fs.ts";
+
+type IO = CommandIO<PythonCommand>;
+
+/** How the process was started: by a program in the VM through one of the commands, or by the application. */
+function launchOf(io: IO): Launch {
+  const { invocation } = io;
+  return invocation.kind === "command"
+    ? { argv0: invocation.argv0, args: io.args, cwd: io.cwd, executable: invocation.path }
+    : { argv0: HOST_ARGV0, args: io.args, cwd: io.cwd, executable: "" };
+}
 
 /**
- * The command: `main(io)` runs the Python program named by the first argument and returns its exit status. A missing
- * program is a usage error that costs nothing, because Python is started only once there is something to run.
+ * Answers -V, -h and a command line that cannot be used, without starting Python. Like CPython, which prints the
+ * version and the help with `printf`, a reader that has gone away does not make them fail.
  */
-export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks {
+function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandLine, { kind: "run" }>): number {
+  const print = (text: string): number => {
+    try {
+      host.fs.writeAll(io.stdout, new TextEncoder().encode(text));
+    } catch {
+      // Nothing to do: the output had nowhere to go.
+    }
+    return 0;
+  };
+  switch (line.kind) {
+    case "version": return print(versionText());
+    case "help": return print(helpText(argv0));
+    case "usage-error": return host.fail(2, usageError(argv0, line.message).trimEnd());
+  }
+}
+
+/**
+ * The command: `main(io)` reads the command line as CPython 3.14 does and runs the program it names (a file, the text
+ * after -c, or standard input) with the trees of the VM that Python sees mounted. Everything that can be refused is refused
+ * before Python starts, so a usage error, a missing file or a directory Python cannot see costs nothing.
+ */
+export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks<PythonCommand> {
   const sockets = socketBridge(host);
+  const report = (error: unknown): void => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); };
   return {
     async main(io) {
-      const invocation = invocationOf(io.args, io.cwd);
-      if (invocation === undefined) return host.fail(2, USAGE);
-      const source = readScript(host.fs, error => host.kit.errno.of(error), invocation);
-      if (source.kind === "unreadable") return host.fail(source.message.includes("can't open file") ? 2 : 1, source.message);
+      const launch = launchOf(io);
+      const line = parseCommandLine(io.args);
+      if (line.kind !== "run") return answer(host, io, launch.argv0, line);
+      const trees = visibleTrees(io.env["HOME"], host.fs);
+      const refusal = interactiveRefusal(launch.argv0, line, io.terminals.stdin) ?? placementRefusal(launch.argv0, launch.cwd, line, trees);
+      if (refusal !== undefined) return host.fail(2, refusal);
+      for (const warning of line.warnings) host.log(warning);
+      const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin }, launch, line);
+      if (prepared.kind === "failed") return host.fail(prepared.status, prepared.message);
 
-      const identity = guestProcess(await host.process.info(), io.cwd);
-      const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: line => { host.log(line); } }, engine);
-      mountTree(py.FS, host.fs, host.kit.errno, WORKSPACE, error => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); });
+      const identity = guestProcess(await host.process.info(), launch.cwd);
+      const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: text => { host.log(text); } }, engine);
+      for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno);
       installGuest(py, identity, { run: nativeRunner(host), sockets });
-      return runScript(py, invocation, source.text);
+      return runProgram(py, prepared.request);
     },
     async close() {
       await sockets.closeAll();

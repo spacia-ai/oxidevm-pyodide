@@ -8,7 +8,7 @@ import { decodeUpstreamLock } from "../scripts/upstream-lock.ts";
 import definition from "../module.ts";
 import { field } from "./support/decode.ts";
 import { decodeLockfile, wheelsFor } from "../src/lock.ts";
-import { NOTICE_FILES, PACKAGE_NAMES, RUNTIME_FILES, WHEELS } from "../src/shipped.ts";
+import { COMMANDS, NOTICE_FILES, PACKAGE_NAMES, RUNTIME_FILES, WHEELS } from "../src/shipped.ts";
 
 // The manifest in module.ts must be a literal (the build reads it without running code), so the files and packages it names
 // are written out there and again in src/shipped.ts and upstream/lock.json. These tests are what keeps the copies equal.
@@ -21,6 +21,13 @@ const pyodideLock = decodeLockfile(await readFile(join(root, "upstream/pyodide-l
 describe("the manifest", () => {
   it("is what the SDK's own declaration decoder accepts", () => {
     expect(() => decodeDeclaration(manifest)).not.toThrow();
+  });
+
+  it("declares python3 and python as commands on the VM's PATH, the names src/shipped.ts gives them", () => {
+    expect(manifest.commands).toEqual(["python", "python3"]);
+    expect([...manifest.commands]).toEqual([...COMMANDS]);
+    expect([...COMMANDS]).toEqual([...COMMANDS].sort());
+    expect(manifest.version).toBe("0.2.0");
   });
 
   it("declares a command module for the Emscripten ABI with the host operations the adapter uses", () => {

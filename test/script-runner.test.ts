@@ -1,6 +1,8 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PYTHON_VERSION } from "../src/cli.ts";
+import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
 import { startGuest } from "./support/guest-fixture.ts";
 import type { GuestFixture } from "./support/guest-fixture.ts";
 
@@ -8,7 +10,13 @@ import type { GuestFixture } from "./support/guest-fixture.ts";
 // text on standard output and standard error.
 
 let guest: GuestFixture;
-beforeAll(async () => { guest = await startGuest(); });
+beforeAll(async () => {
+  guest = await startGuest();
+  for (const [path, text] of oracleFiles()) {
+    await mkdir(dirname(guest.files.real(path)), { recursive: true });
+    await writeFile(guest.files.real(path), text);
+  }
+});
 afterAll(async () => { await guest.stop(); await guest.dispose(); });
 
 describe("exit status", () => {
@@ -131,7 +139,7 @@ describe("the program's world", () => {
 
   it("reports the real process: id, user, group, directory and the environment of the VM minus its Python settings", async () => {
     const result = await guest.run("import os\nprint(os.getpid(), os.getuid(), os.geteuid(), os.getgid(), os.getegid(), os.getcwd())\nprint(os.environ.get('HOME'), os.environ.get('MPLBACKEND'), os.environ.get('FOO'), os.environ.get('PATH'), os.environ.get('PYTHONHOME'))");
-    expect(result).toEqual({ status: 0, stdout: "4242 1000 1000 1001 1001 /workspace\n/workspace Agg bar /usr/bin None\n", stderr: "" });
+    expect(result).toEqual({ status: 0, stdout: "4242 1000 1000 1001 1001 /workspace\n/home/user Agg bar /usr/bin None\n", stderr: "" });
   });
 
   it("works on the workspace's files, which Linux sees at once", async () => {
@@ -171,5 +179,43 @@ describe("standard streams", () => {
     expect(result.stdout.length).toBe(20000 * 52);
     expect(result.stdout.startsWith("line 00000 ")).toBe(true);
     expect(result.stdout.endsWith(`line 19999 ${"x".repeat(40)}\n`)).toBe(true);
+  });
+});
+
+describe("how the program was started, against CPython 3.14", () => {
+  const MODULE = { executable: "/usr/local/bin/python3", version: PYTHON_VERSION };
+  // Every recorded case that runs a program, or fails to read one. The one that ends with SIGINT is in signals.test.ts.
+  const cases = oracle.cases.filter(recorded => recordedOutcome(recorded) === "run" && recorded.exit.kind === "exited");
+
+  it("covers a file, -c and standard input, a traceback of each kind, and a file that cannot be read", () => {
+    const names = cases.map(recorded => recorded.name);
+    for (const name of ["file-with-arguments", "code-with-arguments", "stdin-dash-with-arguments", "stdin-without-arguments", "code-traceback", "stdin-traceback", "missing-file"]) expect(names).toContain(name);
+  });
+
+  for (const recorded of cases) {
+    it(`${recorded.name}: sys.argv, sys.orig_argv, sys.executable, sys.path[0], __file__, the program name, output and status`, async () => {
+      const result = await guest.runCommandLine(recorded.argv.slice(1), { cwd: oracle.provenance.cwd, stdin: recorded.stdin, argv0: oracle.provenance.argv0, executable: MODULE.executable });
+      expect(result).toEqual({ status: recorded.exit.kind === "exited" ? recorded.exit.code : -1, stdout: normalised(recorded.stdout, MODULE), stderr: normalised(recorded.stderr, MODULE) });
+    });
+  }
+});
+
+describe("the interpreter between programs", () => {
+  it("puts the program's place first on sys.path instead of Pyodide's empty entry, and restores sys.path afterwards", async () => {
+    const before: unknown = guest.py.runPython("import sys, json\njson.dumps(sys.path)");
+    const file = await guest.run("import sys\nprint(sys.path.count(''), sys.path[0])");
+    expect(file).toEqual({ status: 0, stdout: "0 /workspace\n", stderr: "" });
+    const code = await guest.runCommandLine(["-c", "import sys\nprint(sys.path.count(''), repr(sys.path[0]))"]);
+    expect(code).toEqual({ status: 0, stdout: "1 ''\n", stderr: "" });
+    expect(guest.py.runPython("import sys, json\njson.dumps(sys.path)")).toBe(before);
+  });
+
+  it("reports an empty sys.executable for an application start, which has no path", async () => {
+    expect(await guest.runCommandLine(["-c", "import sys\nprint(repr(sys.executable), sys.orig_argv)"], { argv0: "pyodide", executable: "" })).toEqual({ status: 0, stdout: "'' ['pyodide', '-c', 'import sys\\nprint(repr(sys.executable), sys.orig_argv)']\n", stderr: "" });
+  });
+
+  it("forgets the source of a -c program once it has run", async () => {
+    await guest.runCommandLine(["-c", "pass"]);
+    expect(guest.py.runPython("import linecache\n'<string>' in linecache.cache")).toBe(false);
   });
 });

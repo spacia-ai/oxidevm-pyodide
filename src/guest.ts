@@ -9,7 +9,7 @@ export interface ProcessIdentity {
   readonly pid: number;
   readonly uid: number;
   readonly gid: number;
-  /** The working directory Python starts in (inside the workspace). */
+  /** The working directory Python starts in (inside a tree Python sees). */
   readonly cwd: string;
 }
 
