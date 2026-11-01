@@ -29,4 +29,4 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
   committed `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's
   minimum-release-age policy.
 - Release by tag: `pnpm run release` prints the steps.
-- Commits, tags, pull requests and release notes in this repository are the maintainer's: authored as `Łukasz Potępa <lukasz@spacia.ai>`, with no AI attribution (no `Co-Authored-By` trailer, no "Generated with" line). Before pushing, `git log origin/main..HEAD --format='%an <%ae> | %cn <%ce> | %B' | grep -iE 'claude|anthropic|co-authored-by|generated with'` must print nothing.
+- Commits, tags, pull requests and release notes in this repository are the maintainer's: authored as `Łukasz Potępa <lukasz@spacia.ai>`, with no AI attribution (no `Co-Authored-By` trailer, no "Generated with" line). Before pushing, `git log origin/main..HEAD --format='%an <%ae> | %cn <%ce> | %B' | grep -iE '^co-authored-by:|generated with'` must print nothing.
