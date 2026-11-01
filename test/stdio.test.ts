@@ -41,7 +41,7 @@ describe("standard output and error", () => {
     expect(evaluate(attempt)).toBe("PermissionError EACCES");
     behaviour.writeAll = () => { throw new LinuxError(2); };
     expect(evaluate(attempt)).toBe("FileNotFoundError ENOENT");
-    // A closed output is a BrokenPipeError, as it is for a native Python (the kit maps EPIPE since alpha 303).
+    // A closed output is a BrokenPipeError, as it is for a native Python (the kit maps EPIPE).
     behaviour.writeAll = () => { throw new LinuxError(32); };
     expect(evaluate(attempt)).toBe("BrokenPipeError EPIPE");
     // An errno with no Emscripten counterpart still becomes an I/O error rather than a wrong name.

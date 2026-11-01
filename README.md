@@ -5,7 +5,7 @@ An [OxideVM](https://oxidevm.dev) WebAssembly module (a command) that runs Pytho
 shares the VM's files, process ids and sockets with real Linux programs: it reads and writes `/workspace` as Linux sees it,
 starts native programs, and talks to services they listen with. pandas and Matplotlib are included.
 
-Status: pre-release `0.1.0`, built on the `wasm-modules` line of the SDK (0.1.0-alpha.303, Userspace API 144). See
+Status: pre-release `0.1.0`, built on the SDK 0.0.7 (Userspace API 144). See
 [Known limits](#known-limits).
 
 ## Use it
@@ -118,13 +118,12 @@ installs inside Python are out of scope.
 - A socket behaves like any socket: `sendall` waits when the other side is not reading and the buffers are full, so a client
   that sends a lot to a service that echoes it should read as it writes, or use `settimeout`.
 - Startup depends on the host: the interpreter alone is about a second, pandas and Matplotlib add several seconds.
-- Licences: see [NOTICES.txt](NOTICES.txt), [SOURCE-OFFER.md](SOURCE-OFFER.md) and the [licences](#licences) below. They have
-  not had a legal review.
+- Licences: see [NOTICES.txt](NOTICES.txt), [SOURCE-OFFER.md](SOURCE-OFFER.md) and the [licences](#licences) below. The
+  maintainer has signed them off; they have not had an independent legal review.
 
 ## Develop it
 
-`@oxidevm/sdk` and `@oxidevm/cli` come from the private registry's `wasm-modules` dist-tag: put
-`@oxidevm:registry=http://127.0.0.1:4873/` in an untracked `.npmrc` first (see `AGENTS.md`).
+`@oxidevm/sdk` and `@oxidevm/cli` are exact devDependencies, installed from npm (see `AGENTS.md`).
 
 ```sh
 pnpm install
@@ -165,9 +164,8 @@ gh release edit v0.1.0 --draft=false
 
 `pnpm run release` (`oxidevm wasm release --repo spacia-ai/oxidevm-pyodide`) prints these steps and runs none of them. The
 `release` workflow does the same in GitHub Actions, in two jobs: a read-only one fetches the upstream files and builds, and a
-second one, which installs nothing, drafts, verifies and publishes. Both workflows start on request only (run `release` from
-the tag): the install step needs `@oxidevm/sdk` and `@oxidevm/cli`, which only a private registry serves today (see
-`AGENTS.md`), so a push trigger would fail on every push.
+second one, which installs nothing, drafts, verifies and publishes. The `ci` workflow runs on pushes to `main` and on pull
+requests, and `release` runs when a `v*` tag is pushed.
 
 ## Licences
 

@@ -23,10 +23,8 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
   test that fails without it (a round of 89 one-line mutations of `src/` found 15 branches that no test guarded).
 - Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`. `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.1.0-alpha.303, the `wasm-modules` line, Userspace API
-  144, which `files.sync` and `files.async` need for `utimes`). They come from the private registry: put
-  `@oxidevm:registry=http://127.0.0.1:4873/` in an untracked `.npmrc` (never commit it; the lockfile records no registry). The
-  committed `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's
-  minimum-release-age policy.
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.7, Userspace API 144, which `files.sync` and
+  `files.async` need for `utimes`) and installed from npm. The committed `pnpm-workspace.yaml` only allows esbuild's install
+  script and excludes those two versions from pnpm's minimum-release-age policy.
 - Release by tag: `pnpm run release` prints the steps.
 - Commits, tags, pull requests and release notes in this repository are the maintainer's: authored as `Łukasz Potępa <lukasz@spacia.ai>`, with no AI attribution (no `Co-Authored-By` trailer, no "Generated with" line). Before pushing, `git log origin/main..HEAD --format='%an <%ae> | %cn <%ce> | %B' | grep -iE '^co-authored-by:|generated with'` must print nothing.
