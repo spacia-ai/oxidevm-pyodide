@@ -10,9 +10,10 @@ function parsed(text: string): unknown {
   return value;
 }
 
-/** Starts the module with exactly these arguments (no program written first) and returns how it ended and what it said. */
+/** Starts the module with exactly these arguments (no program written first), standard input closed at once, and returns how it ended and what it said. */
 async function bare(context: Context, args: readonly string[]): Promise<{ readonly exit: ProcessExit; readonly stderr: string }> {
   const process = await spawnModule(context.vm, context.pyodide, { args, options: { packages: [] } });
+  await process.stdin.getWriter().close();
   const [exit, stderr] = await Promise.all([process.exit, new Response(process.stderr).text()]);
   return { exit, stderr };
 }
@@ -67,11 +68,11 @@ sys.exit(3)
 export async function identity(context: Context): Promise<string> {
   const running = await start(context, `import json, os
 print(json.dumps({"pid": os.getpid(), "uid": os.getuid(), "gid": os.getgid(), "euid": os.geteuid(), "cwd": os.getcwd(), "home": os.environ["HOME"], "greeting": os.environ.get("GREETING")}))
-`, { name: "identity", packages: [], env: { GREETING: "hello from the process" } });
+`, { name: "identity", packages: [], env: { GREETING: "hello from the process", HOME: "/workspace/_oxidevm" } });
   const result = await running.finished;
   expectStatus(result, 0, "identity run");
   const uid = (await native(context.vm, "/bin/id", ["-u"])).stdout.trim(), gid = (await native(context.vm, "/bin/id", ["-g"])).stdout.trim();
-  same(parsed(result.stdout), { cwd: "/workspace", euid: Number(uid), gid: Number(gid), greeting: "hello from the process", home: "/workspace", pid: running.process.pid, uid: Number(uid) }, "what Python reports");
+  same(parsed(result.stdout), { cwd: "/workspace", euid: Number(uid), gid: Number(gid), greeting: "hello from the process", home: "/workspace/_oxidevm", pid: running.process.pid, uid: Number(uid) }, "what Python reports (HOME is passed through)");
   return `os.getpid() is the module process's id ${String(running.process.pid)}; uid ${uid}, gid ${gid}`;
 }
 
@@ -92,13 +93,16 @@ export async function exitStatuses(context: Context): Promise<string> {
     check(!/_pyodide|oxidevm-runner/u.test(result.stderr), `${name}: the runner's own frames leaked into ${result.stderr}`);
     seen.push(`${name}=${String(status)}`);
   }
-  const usage = await bare(context, []);
-  same(describeExit(usage.exit), "exit 2", "no program named");
-  check(usage.stderr.includes("usage: pyodide <script.py>"), `the usage text was ${JSON.stringify(usage.stderr)}`);
+  // 0.2.0 reads the command line as CPython does, also when the application starts the module: no program means standard input.
+  const empty = await bare(context, []);
+  same(describeExit(empty.exit), "exit 0", "no program named, and nothing on standard input");
+  const usage = await bare(context, ["-Z"]);
+  same(describeExit(usage.exit), "exit 2", "an unknown option");
+  check(usage.stderr.includes("Unknown option: -Z\nusage: pyodide [option] ... [-c cmd | -m mod | file | -] [arg] ..."), `the usage text was ${JSON.stringify(usage.stderr)}`);
   const absent = await bare(context, ["/workspace/_oxidevm/no-such-program.py"]);
   same(describeExit(absent.exit), "exit 2", "a program that does not exist");
   check(absent.stderr.includes("can't open file '/workspace/_oxidevm/no-such-program.py': [Errno 2] No such file or directory"), `the message was ${JSON.stringify(absent.stderr)}`);
-  return `${seen.join(" ")} usage=2 missing=2`;
+  return `${seen.join(" ")} empty=0 usage=2 missing=2`;
 }
 
 export async function tamperedArtifact(context: Context): Promise<string> {

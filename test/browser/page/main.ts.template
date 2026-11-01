@@ -1,4 +1,5 @@
 // Copied into a project that `oxidevm wasm add` has populated: `pyodide` is the generated, fully typed handle.
+import { enableModuleCommands } from "@oxidevm/sdk/wasm";
 import type { SpawnOptions } from "@oxidevm/sdk/wasm";
 import { pyodide } from "./oxidevm.modules.generated.ts";
 import { runScenarios } from "./scenarios.ts";
@@ -19,6 +20,9 @@ export const rejected: Options = { options: { packages: ["scipy"] } };
 
 // The Node side of the test drives this page: it calls `runModuleScenarios` with the served locations.
 Object.defineProperty(window, "runModuleScenarios", {
-  value: (config: ScenarioConfig) => runScenarios(config, pyodide, result => { void window.oxidevmReport?.(result); }),
+  value: (config: ScenarioConfig) => runScenarios(config, pyodide, result => { void window.oxidevmReport?.(result); }, {
+    // Only the interpreter: each run of a command starts Pyodide again.
+    enable: vm => enableModuleCommands(vm, pyodide, { options: { packages: [] } }),
+  }),
   enumerable: true,
 });

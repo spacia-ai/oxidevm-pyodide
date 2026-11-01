@@ -1,6 +1,8 @@
 import { createVM, defineImage } from "@oxidevm/sdk";
 import type { UserspaceVM } from "@oxidevm/sdk";
 import type { ModuleHandle } from "@oxidevm/sdk/wasm";
+import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
+import type { CommandSwitch } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
 import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
 import { sockets } from "./scenarios-sockets.ts";
@@ -58,9 +60,10 @@ async function openVM(config: ScenarioConfig): Promise<UserspaceVM> {
 
 /**
  * Boots one Userspace VM from the pinned engine and the signed image, then runs every scenario against the installed
- * module, reporting each result through `report` as it finishes.
+ * module, reporting each result through `report` as it finishes. The command scenarios run last, with the module's
+ * commands turned on through `commands`.
  */
-export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle, report: (result: ScenarioResult) => void): Promise<readonly ScenarioResult[]> {
+export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle, report: (result: ScenarioResult) => void, commands?: CommandSwitch): Promise<readonly ScenarioResult[]> {
   const booting = performance.now();
   const vm = await openVM(config);
   const results: ScenarioResult[] = [];
@@ -68,15 +71,19 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
   try {
     record({ name: "boot", ok: true, detail: `Userspace VM ready in ${String(Math.round(performance.now() - booting))} ms` });
     await vm.workspace.createDirectory("_oxidevm").catch(() => undefined);
-    const context: Context = { vm, pyodide };
-    for (const [name, run] of SCENARIOS) {
-      if (config.only !== undefined && !name.includes(config.only)) continue;
+    const context: Context = { vm, pyodide, ...(commands === undefined ? {} : { commands }) };
+    const attempt = async (name: string, run: (given: Context) => Promise<string>, given: Context): Promise<void> => {
+      if (config.only !== undefined && !name.includes(config.only)) return;
       try {
-        record({ name, ok: true, detail: await withDeadline(run(context), name) });
+        record({ name, ok: true, detail: await withDeadline(run(given), name) });
       } catch (error: unknown) {
         record({ name, ok: false, detail: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
       }
-    }
+    };
+    for (const [name, run] of SCENARIOS) await attempt(name, run, context);
+    let enabled: { disable(): Promise<void> } | undefined;
+    await attempt("command: enableModuleCommands turns python and python3 on", async given => { enabled = await enableCommands(given); return "enabled"; }, context);
+    for (const [name, run] of COMMAND_SCENARIOS) await attempt(name, run, enabled === undefined ? context : { ...context, enabledCommands: enabled });
   } finally {
     await vm.dispose();
   }
