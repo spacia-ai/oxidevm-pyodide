@@ -7,10 +7,8 @@ them, starts native programs, and talks to services they listen with. pandas and
 start it, or turn on its commands, `python3` and `python`, so that shells, scripts and other programs of the VM run it from
 their PATH like any program.
 
-Status: `0.2.0` in development. It needs the `@oxidevm` SDK and CLI release that serves module commands and the
-`process.signals` capability (Userspace API 145, engine ADR 0027), which is not published yet; pre-release `0.1.0`, built on
-the SDK 0.0.8 (Userspace API 144), is the current release. See [Known limits](#known-limits) and
-[Changes in 0.2.0](#changes-in-020).
+Status: pre-release `0.2.0`, built on the SDK 0.0.9 (Userspace API 145), which serves module commands and the
+`process.signals` capability (engine ADR 0027). See [Known limits](#known-limits) and [Changes in 0.2.0](#changes-in-020).
 
 ## Use it
 
@@ -244,7 +242,7 @@ requests, and `release` runs when a `v*` tag is pushed.
 ## Changes in 0.2.0
 
 - **Commands.** The module declares `python` and `python3` and the `process.signals` capability, so installing 0.2.0 asks
-  for consent again. An application turns the commands on with `enableModuleCommands` (SDK with Userspace API 145).
+  for consent again. An application turns the commands on with `enableModuleCommands` (SDK 0.0.9, Userspace API 145).
 - **The command line is CPython's, for application starts too.** `spawnModule` arguments are read as `python3` reads its
   own, with `pyodide` as the command's name. A start without a program now reads one from standard input (0.1.0 printed
   `usage: pyodide <script.py> [argument ...]` and exited with 2), `-c` and `-` work, `-V` and `-h` answer, and other options

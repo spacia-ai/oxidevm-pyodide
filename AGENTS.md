@@ -41,11 +41,13 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   test that fails without it (a round of 89 one-line mutations of `src/` found 15 branches that no test guarded).
 - Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`, then `pnpm run test:conformance` (`oxidevm wasm test` in a real browser). `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.8, Userspace API 144, which `files.sync` and
-  `files.async` need for `utimes`) and installed from npm. The committed `pnpm-workspace.yaml` only allows esbuild's install
-  script and excludes those two versions from pnpm's minimum-release-age policy.
-- 0.2.0 needs the release that serves module commands and `process.signals` (Userspace API 145), which is not published
-  yet. Until then, develop against a local build of the SDK repository:
+  `test:conformance` starts the module as `-c pass`: a start without a program reads one from standard input, which
+  `oxidevm wasm test` leaves open, so it would never end.
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.9, Userspace API 145, which module commands and
+  `process.signals` need; `files.sync` and `files.async` need 144 for `utimes`) and installed from npm. The committed
+  `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's minimum-release-age
+  policy.
+- To develop against an SDK that is not published yet, use a local build of the SDK repository:
   `pnpm add -D @oxidevm/sdk@file:<sdk>/packages/sdk @oxidevm/cli@link:<sdk>/packages/cli` (the CLI as a link, because it
   depends on the SDK through its workspace), and never commit the resulting `package.json` and `pnpm-lock.yaml`.
 - Release by tag: `pnpm run release` prints the steps.

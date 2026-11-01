@@ -13,13 +13,13 @@
     "notices": "node scripts/generate-notices.ts",
     "release": "oxidevm wasm release",
     "test": "vitest run",
-    "test:conformance": "oxidevm wasm build && oxidevm wasm test",
+    "test:conformance": "oxidevm wasm build && oxidevm wasm test --arg=-c --arg=pass",
     "test:browser": "node test/browser/harness.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@oxidevm/cli": "0.0.8",
-    "@oxidevm/sdk": "0.0.8",
+    "@oxidevm/cli": "0.0.9",
+    "@oxidevm/sdk": "0.0.9",
     "@types/emscripten": "1.41.6",
     "@types/node": "24.13.3",
     "eslint": "10.7.0",
