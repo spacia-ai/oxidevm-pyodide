@@ -21,3 +21,6 @@ jobs:
       - run: pnpm run fetch-upstream
       - run: pnpm run check
       - run: pnpm test
+      # oxidevm wasm test drives the SDK's Playwright; playwright-core of the same version installs its Chromium.
+      - run: pnpm exec playwright-core install --with-deps chromium
+      - run: pnpm run test:conformance

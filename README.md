@@ -5,7 +5,7 @@ An [OxideVM](https://oxidevm.dev) WebAssembly module (a command) that runs Pytho
 shares the VM's files, process ids and sockets with real Linux programs: it reads and writes `/workspace` as Linux sees it,
 starts native programs, and talks to services they listen with. pandas and Matplotlib are included.
 
-Status: pre-release `0.1.0`, built on the SDK 0.0.7 (Userspace API 144). See
+Status: pre-release `0.1.0`, built on the SDK 0.0.8 (Userspace API 144). See
 [Known limits](#known-limits).
 
 ## Use it
@@ -131,6 +131,7 @@ pnpm run fetch-upstream  # the mirrored runtime and wheels (about 29 MB)
 pnpm run check           # tsc (module, tests, scripts), eslint with no warnings, and oxidevm wasm build --check
 pnpm test                # unit tests: the real Pyodide in Node, against fakes of the VM's files, processes and sockets
 pnpm run build           # dist/: module.json, adapter.mjs, the artifacts and SHA256SUMS
+pnpm run test:conformance  # oxidevm wasm test: the runner's contract, in Chromium
 pnpm run test:browser    # the same module against the real engine in Chromium; see test/browser/harness.ts
 pnpm run notices         # regenerate NOTICES.txt and SOURCE-OFFER.md after changing the wheels or legal/
 ```

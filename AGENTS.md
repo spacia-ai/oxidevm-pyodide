@@ -21,9 +21,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`.
 - Tests that mount the file system bridge use `test/support/workspace-fixture.ts`; tests of the Python side use
   `test/support/guest-fixture.ts`. Keep each test file near 600 lines, and when a behaviour is guarded by a branch, write the
   test that fails without it (a round of 89 one-line mutations of `src/` found 15 branches that no test guarded).
-- Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`. `pnpm run test:browser` needs
+- Verify with `pnpm run check` (types, lint, and `oxidevm wasm build --check`), then `pnpm test`, then `pnpm run test:conformance` (`oxidevm wasm test` in a real browser). `pnpm run test:browser` needs
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.7, Userspace API 144, which `files.sync` and
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.8, Userspace API 144, which `files.sync` and
   `files.async` need for `utimes`) and installed from npm. The committed `pnpm-workspace.yaml` only allows esbuild's install
   script and excludes those two versions from pnpm's minimum-release-age policy.
 - Release by tag: `pnpm run release` prints the steps.
