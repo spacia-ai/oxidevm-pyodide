@@ -60,6 +60,7 @@ CASES = [
     ("unknown-long-option", ["--foo"], "", "all"),
     ("long-option-in-group", ["-u-x"], "", "all"),
     ("empty-long-option-in-group", ["-u-", "sub/probe.py"], "", "all"),
+    ("empty-long-option-ends-options", ["-u-", "-Z"], "", "all"),
     ("code-without-argument", ["-c"], "", "all"),
     ("grouped-code-without-argument", ["-uc"], "", "all"),
     ("double-dash-before-file", ["--", "sub/probe.py", "-c", "-Z"], "", "all"),

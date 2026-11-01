@@ -320,6 +320,22 @@
       }
     },
     {
+      "name": "empty-long-option-ends-options",
+      "argv": [
+        "python3",
+        "-u-",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Expected long option\npython3: can't open file '/tmp/oxidevm-pyodide-cli/-Z': [Errno 2] No such file or directory\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
       "name": "code-without-argument",
       "argv": [
         "python3",
