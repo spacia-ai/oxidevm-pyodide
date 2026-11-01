@@ -1,7 +1,7 @@
 import type { ProcessExit, ProcessHandle, UserspaceVM } from "@oxidevm/sdk";
 import { spawnModule } from "@oxidevm/sdk/wasm";
 import type { ModuleHandle } from "@oxidevm/sdk/wasm";
-import type { CommandSwitch } from "./scenarios-commands.ts";
+import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 
 /** What a scenario works with: the booted VM and the installed module, and its commands once they are on. */
 export interface Context {
@@ -10,7 +10,7 @@ export interface Context {
   /** How the page turns the module's commands on (`enableModuleCommands`). */
   readonly commands?: CommandSwitch;
   /** The commands, while they are on. */
-  readonly enabledCommands?: { disable(): Promise<void> };
+  readonly enabledCommands?: EnabledCommands;
 }
 
 export const decoder = new TextDecoder();

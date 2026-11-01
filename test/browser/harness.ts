@@ -11,7 +11,8 @@
 //
 // Optional: OXIDEVM_ENGINE_DIR, OXIDEVM_ENGINE_COMPLIANCE_DIR (default: ~/.cache/oxidevm/engine/...), OXIDEVM_VERBOSE=1
 // (page console output), --only <text> (run the scenarios whose name contains it), --keep (keep the scratch directory),
-// --no-build (use the existing dist/).
+// --no-build (use the existing dist/). The results go to .cache/test-results/pyodide-browser.json, and the server's log
+// (every path requested, in order) to pyodide-browser-requests.txt beside it.
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile, realpath } from "node:fs/promises";
@@ -62,25 +63,37 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 
 interface Served {
   readonly origin: string;
+  /** The server's log: every path requested, in order, except the test's own `/__` switches. */
+  readonly requests: readonly string[];
   readonly close: () => Promise<void>;
 }
 
 /**
  * Serves the page, the engine and the image with the headers cross-origin isolation needs. Nothing is cached, so a change
- * of the tamper switch takes effect on the next request. While the switch is on, the module's `python_stdlib` file is
- * served with one byte changed, as a compromised host would serve it.
+ * of the tamper switch takes effect on the next request, and every file a run needs is requested again. While the switch
+ * is on, the module's `python_stdlib` file is served with one byte changed, as a compromised host would serve it.
+ * `/__requests?since=<n>` answers with the server's log from entry n on (`{ next, paths }`), so that a scenario can check
+ * what was fetched while it ran.
  */
 async function serve(locations: { readonly inputs: Inputs; readonly page: string; readonly imagePrefix: string }): Promise<Served> {
   let tamper = false;
+  const requests: string[] = [];
   const { inputs, page, imagePrefix } = locations;
   const server: Server = createServer((request, response) => {
-    const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    const url = new URL(request.url ?? "/", "http://localhost"), path = url.pathname;
     for (const [name, value] of [["Cross-Origin-Opener-Policy", "same-origin"], ["Cross-Origin-Embedder-Policy", "require-corp"], ["Cross-Origin-Resource-Policy", "same-origin"], ["Cache-Control", "no-store"]] as const) response.setHeader(name, value);
     if (path === "/__tamper/on" || path === "/__tamper/off") {
       tamper = path.endsWith("on");
       response.end(tamper ? "on" : "off");
       return;
     }
+    if (path === "/__requests") {
+      const since = Number(url.searchParams.get("since") ?? "0");
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ next: requests.length, paths: requests.slice(Number.isSafeInteger(since) && since > 0 ? since : 0) }));
+      return;
+    }
+    requests.push(path);
     const complianceRoot = "/engine/compliance/";
     const file = path.startsWith(complianceRoot) && inputs.complianceDir !== undefined ? join(inputs.complianceDir, path.slice(complianceRoot.length + 65))
       : path.startsWith("/engine/") ? join(inputs.engineDir, path.slice("/engine/".length))
@@ -103,7 +116,7 @@ async function serve(locations: { readonly inputs: Inputs; readonly page: string
   await new Promise<void>(ready => { server.listen(0, "127.0.0.1", ready); });
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("the test server has no port");
-  return { origin: `http://127.0.0.1:${String(address.port)}`, close: () => new Promise<void>(done => { server.close(() => { done(); }); }) };
+  return { origin: `http://127.0.0.1:${String(address.port)}`, requests, close: () => new Promise<void>(done => { server.close(() => { done(); }); }) };
 }
 
 async function cli(project: string, ...args: readonly string[]): Promise<string> {
@@ -159,7 +172,7 @@ export interface Options {
 }
 
 /** Runs the whole pipeline and returns the scenario results. The scratch directory is removed unless `keep` is set. */
-export async function runBrowserTest(options: Options): Promise<{ readonly results: readonly Scenario[]; readonly browser: string }> {
+export async function runBrowserTest(options: Options): Promise<{ readonly results: readonly Scenario[]; readonly browser: string; readonly requests: readonly string[] }> {
   const inputs = await locateInputs(process.env);
   if (options.build) await cli(root, "wasm", "build");
   await stat(join(root, "dist/module.json"));
@@ -190,7 +203,7 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
         const outcome: unknown = await Reflect.apply(run, undefined, [input]);
         return outcome;
       }, { origin: served.origin, image, ...(options.only === undefined ? {} : { only: options.only }) });
-      return { results: decodeResults(value), browser: `chromium ${browser.version()}` };
+      return { results: decodeResults(value), browser: `chromium ${browser.version()}`, requests: served.requests };
     } finally {
       await browser.close();
     }
@@ -203,10 +216,11 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
 if (import.meta.main) {
   const { values } = parseArgs({ options: { only: { type: "string" }, keep: { type: "boolean" }, "no-build": { type: "boolean" } }, strict: true });
   try {
-    const { results, browser } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, ...(values.only === undefined ? {} : { only: values.only }) });
+    const { results, browser, requests } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, ...(values.only === undefined ? {} : { only: values.only }) });
     const failed = results.filter(result => !result.ok).length;
     await mkdir(join(root, ".cache/test-results"), { recursive: true });
     await writeFile(join(root, ".cache/test-results/pyodide-browser.json"), `${JSON.stringify({ browser, results }, null, 2)}\n`);
+    await writeFile(join(root, ".cache/test-results/pyodide-browser-requests.txt"), `${requests.join("\n")}\n`);
     process.stdout.write(`\n${String(results.length - failed)} of ${String(results.length)} scenarios passed (${browser})\n`);
     process.exitCode = failed === 0 && results.length > 0 ? 0 : 1;
   } catch (error: unknown) {

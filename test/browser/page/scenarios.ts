@@ -2,7 +2,7 @@ import { createVM, defineImage } from "@oxidevm/sdk";
 import type { UserspaceVM } from "@oxidevm/sdk";
 import type { ModuleHandle } from "@oxidevm/sdk/wasm";
 import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
-import type { CommandSwitch } from "./scenarios-commands.ts";
+import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
 import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
 import { sockets } from "./scenarios-sockets.ts";
@@ -81,8 +81,12 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
       }
     };
     for (const [name, run] of SCENARIOS) await attempt(name, run, context);
-    let enabled: { disable(): Promise<void> } | undefined;
-    await attempt("command: enableModuleCommands turns python and python3 on", async given => { enabled = await enableCommands(given); return "enabled"; }, context);
+    let enabled: EnabledCommands | undefined;
+    await attempt("command: enableModuleCommands turns python and python3 on", async given => {
+      const began = performance.now();
+      enabled = await enableCommands(given);
+      return `enabled in ${String(Math.round(performance.now() - began))} ms (the module's files fetched, checked and kept once)`;
+    }, context);
     for (const [name, run] of COMMAND_SCENARIOS) await attempt(name, run, enabled === undefined ? context : { ...context, enabledCommands: enabled });
   } finally {
     await vm.dispose();
