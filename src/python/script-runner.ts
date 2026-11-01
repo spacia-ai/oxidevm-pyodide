@@ -4,7 +4,11 @@
  * a namespace of its own that holds `_request`, a dict with the program's `filename` (its absolute path, `<string>` or
  * `<stdin>`), its `source`, `argv`, `orig_argv`, `executable`, `path0` (for `sys.path[0]`), `file` (for `__file__`, or None)
  * and `cache_source` (whether tracebacks may show the source, as CPython 3.13+ does for -c). Errors are printed as Python
- * prints them, without this runner's own frames, so that the output looks like the program's. `eval_code_async` comes
+ * prints them, without this runner's own frames, so that the output looks like the program's. A KeyboardInterrupt the
+ * program leaves unhandled is printed the same way and answered with "SIGINT", after atexit has run, so that the process
+ * can end killed by SIGINT as CPython's does. `_request["arm"]` (or None) makes Pyodide watch for Ctrl+C; the runner calls
+ * it inside its own `try`, so that no KeyboardInterrupt, not even one that arrived before the program started or while
+ * the runner finishes, escapes into Pyodide's event loop. `eval_code_async` comes
  * from Pyodide's private `_pyodide._base`, because a program started as a command cannot import `pyodide.code`.
  */
 export const SCRIPT_RUNNER_SOURCE = `import atexit as _atexit
@@ -69,19 +73,33 @@ def _finish(saved):
     _sys.path[:] = original_path
 
 
-async def _run():
-    program = _types.ModuleType("__main__")
-    saved = _started(program)
+async def _program(program):
     try:
         await _eval_code_async(_request["source"], program.__dict__, filename=_request["filename"], return_mode="none", dont_inherit=True)
         return 0
     except SystemExit as stop:
         return _requested_status(stop.code)
+    except KeyboardInterrupt as error:
+        _traceback.print_exception(type(error), error, _user_traceback(error))
+        return "SIGINT"
     except BaseException as error:
         _traceback.print_exception(type(error), error, _user_traceback(error))
         return 1
-    finally:
-        _finish(saved)
+
+
+async def _run():
+    try:
+        if _request["arm"] is not None:
+            _request["arm"]()
+        program = _types.ModuleType("__main__")
+        saved = _started(program)
+        try:
+            return await _program(program)
+        finally:
+            _finish(saved)
+    except KeyboardInterrupt:
+        # Ctrl+C before the program started, or while the runner finishes: the process ends by SIGINT all the same.
+        return "SIGINT"
 
 
 await _run()

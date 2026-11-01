@@ -48,6 +48,9 @@ export type Prepared =
   | { readonly kind: "ready"; readonly request: ProgramRequest }
   | { readonly kind: "failed"; readonly status: number; readonly message: string };
 
+/** How the program ended: with the status it asked for, or with a KeyboardInterrupt it left unhandled. */
+export type ProgramOutcome = { readonly kind: "exit"; readonly status: number } | { readonly kind: "signal"; readonly signal: "SIGINT" };
+
 type RunLine = Extract<CommandLine, { kind: "run" }>;
 
 /** The absolute path CPython gives a program file: the working directory joined with the name as typed, `.` and `..` kept. */
@@ -161,19 +164,22 @@ export function prepareProgram(host: ProgramHost, launch: Launch, line: RunLine)
   }
 }
 
-/** Runs the program in a Pyodide that is ready, and returns the exit status it asked for. */
-export async function runProgram(py: PyodideInterface, request: ProgramRequest): Promise<number> {
+/**
+ * Runs the program in a Pyodide that is ready, and returns how it ended. `arm` makes Pyodide watch for Ctrl+C
+ * (`Interrupts.arm`); the runner calls it once it can turn every KeyboardInterrupt into an outcome.
+ */
+export async function runProgram(py: PyodideInterface, request: ProgramRequest, arm?: () => void): Promise<ProgramOutcome> {
   // The runner gets a namespace of its own, so that neither its names nor the request appear in the program's globals.
   const namespace: unknown = py.toPy({
     _request: {
       filename: request.filename, source: request.source, argv: [...request.argv], orig_argv: [...request.origArgv], executable: request.executable,
-      path0: request.path0, file: request.file, cache_source: request.cacheSource,
+      path0: request.path0, file: request.file, cache_source: request.cacheSource, arm: arm ?? null,
     },
   });
   if (!(namespace instanceof py.ffi.PyProxy)) throw new Error("Pyodide did not convert the request to a Python dict");
   try {
     const status: unknown = await py.runPythonAsync(SCRIPT_RUNNER_SOURCE, { globals: namespace, filename: "<oxidevm-runner>", dedent: false });
-    return exitStatus(status);
+    return status === "SIGINT" ? { kind: "signal", signal: "SIGINT" } : { kind: "exit", status: exitStatus(status) };
   } finally {
     namespace.destroy();
   }

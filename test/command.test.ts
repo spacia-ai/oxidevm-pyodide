@@ -13,6 +13,7 @@ import type { PythonCommand, ShippedFile } from "../src/shipped.ts";
 import { processId } from "./support/brands.ts";
 import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
 import { fakeProcess } from "./support/fake-process.ts";
+import { fakeSignals } from "./support/fake-signals.ts";
 import { echoUpperCase, fakeSockets } from "./support/fake-sockets.ts";
 import { fakeStdio } from "./support/fake-stdio.ts";
 import { nodeFiles } from "./support/node-files.ts";
@@ -46,6 +47,9 @@ interface Setup {
   readonly startedWith: PyodideOptions[];
   readonly sockets: ReturnType<typeof fakeSockets>;
   readonly stdio: ReturnType<typeof fakeStdio>;
+  readonly signals: ReturnType<typeof fakeSignals>;
+  /** Pyodide loading and every signal operation, in order. */
+  readonly events: string[];
   /** The directory of the test machine behind a VM path. */
   readonly real: (path: string) => string;
 }
@@ -62,6 +66,8 @@ interface SetupOptions {
   readonly fs?: (files: ReturnType<typeof nodeFiles>["files"]) => CommandHost["fs"];
   /** The size of the process's terminal, as the VM reports it. */
   readonly terminal?: { readonly columns: number; readonly rows: number };
+  /** A Ctrl+C arrives as soon as SIGINT is trapped. */
+  readonly interruptAtTrap?: boolean;
 }
 
 function setup(options: SetupOptions = {}): Setup {
@@ -70,7 +76,8 @@ function setup(options: SetupOptions = {}): Setup {
   const children = fakeProcess(() => ({}));
   const sockets = fakeSockets();
   sockets.listen("unix:/workspace/_oxidevm/echo.sock", echoUpperCase());
-  const failures: string[] = [], logs: string[] = [], artifactsRead: ShippedFile[] = [], startedWith: PyodideOptions[] = [];
+  const failures: string[] = [], logs: string[] = [], artifactsRead: ShippedFile[] = [], startedWith: PyodideOptions[] = [], events: string[] = [];
+  const signals = fakeSignals(events, { pendingAtTrap: options.interruptAtTrap === true });
   const toStderr = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
   const lifetime = new AbortController();
   // `log` and `fail` write their line to standard error, as the runner's host does.
@@ -83,18 +90,18 @@ function setup(options: SetupOptions = {}): Setup {
     fs: options.fs?.(files.files) ?? files.files,
     files: children.host.files,
     sockets: sockets.sockets,
-    process: { ...children.host.process, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: options.terminal ?? null }) },
+    process: { ...children.host.process, signals: signals.signals, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: options.terminal ?? null }) },
     log: line => { logs.push(line); toStderr(line); },
     fail: (status, message) => { failures.push(`${String(status)}: ${message}`); toStderr(message); return status; },
   };
   const engine: Engine = {
     scope: { fetch: () => Promise.reject(new Error("no network in tests")) },
     createPyodideModule: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")),
-    loadPyodide: options => { startedWith.push(options); return startPyodide(options.env); },
+    loadPyodide: options => { startedWith.push(options); events.push("load"); return startPyodide(options.env); },
   };
   const command = createCommand(host, engine);
   return {
-    host, failures, logs, artifactsRead, startedWith, sockets, stdio, real: files.real,
+    host, failures, logs, artifactsRead, startedWith, sockets, stdio, signals, events, real: files.real,
     main: (args, given = {}) => {
       stdio.feed(given.stdin ?? "");
       const io: CommandIO<PythonCommand> = {
@@ -194,7 +201,8 @@ describe("a command that answers without starting Python", () => {
   });
 });
 
-describe("a command that runs", () => {
+// Each of these starts a Pyodide of its own, which takes seconds on a busy machine.
+describe("a command that runs", { timeout: 30_000 }, () => {
   it("starts Pyodide from the release's files with the process environment, then runs the program and returns its status", async () => {
     await writeFile(join(root, "workspace/program.py"), "import os, sys\nprint('ran', sys.argv, os.getpid(), os.getuid(), os.getgid(), os.getcwd(), os.environ['HOME'], os.environ.get('PYTHONPATH'))\nsys.exit(5)\n");
     const s = setup();
@@ -244,6 +252,36 @@ describe("a command that runs", () => {
     const s = setup();
     expect(await s.main(["tool.py"], { cwd: "/workspace/project" })).toBe(0);
     expect(s.stdio.take().stdout).toBe("tool.py /workspace/project/tool.py /workspace/project /workspace/project\n");
+    await s.close();
+  });
+
+  it("traps SIGINT once Pyodide has loaded, and ends killed by SIGINT when the program leaves a KeyboardInterrupt unhandled", async () => {
+    const s = setup();
+    // main never returns: raising SIGINT ends the process.
+    void s.main(["-c", "import atexit\natexit.register(print, 'atexit ran')\nraise KeyboardInterrupt"]);
+    expect(await s.signals.raised).toBe("SIGINT");
+    // Until the trap, SIGINT keeps its default action, so Ctrl+C while Pyodide loads ends the process at once.
+    expect(s.events).toEqual(["load", "trap SIGINT", "untrap", "raise SIGINT"]);
+    const { stdout, stderr } = s.stdio.take();
+    expect(stdout).toBe("atexit ran\n");
+    expect(stderr).toBe("Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\n    raise KeyboardInterrupt\nKeyboardInterrupt\n");
+    await s.close();
+  });
+
+  it("raises a Ctrl+C that arrives once SIGINT is trapped as the program starts, so that none of it runs", async () => {
+    const s = setup({ interruptAtTrap: true });
+    void s.main(["-c", "print('started')"]);
+    expect(await s.signals.raised).toBe("SIGINT");
+    expect(s.events).toEqual(["load", "trap SIGINT", "untrap", "raise SIGINT"]);
+    expect(s.stdio.take()).toEqual({ stdout: "", stderr: "" });
+    await s.close();
+  });
+
+  it("exits as the program chooses when it handles KeyboardInterrupt", async () => {
+    const s = setup();
+    expect(await s.main(["-c", "try:\n    raise KeyboardInterrupt\nexcept KeyboardInterrupt:\n    print('handled')"])).toBe(0);
+    expect(s.stdio.take().stdout).toBe("handled\n");
+    expect(s.events).toEqual(["load", "trap SIGINT"]);
     await s.close();
   });
 

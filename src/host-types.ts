@@ -14,6 +14,8 @@ export type ClientSockets = Host<"sockets.connect">["sockets"];
 export type FileDescriptor = ReturnType<SyncFiles["open"]>;
 /** The errno helpers of `host.kit`. */
 export type KitErrno = Host["kit"]["errno"];
+/** This process's signals (`process.signals`). */
+export type ProcessSignals = Host<"process.signals">["process"]["signals"];
 
 /** What the command uses of the host, spelled out so that a test can supply exactly that much. The runner's host has all of it. */
 export interface CommandHost {
@@ -27,7 +29,7 @@ export interface CommandHost {
   readonly fs: SyncFiles;
   readonly files: Pick<AsyncFiles, "read" | "writeAll" | "close">;
   readonly sockets: ClientSockets;
-  readonly process: Pick<Host<"process.info" | "process.spawn">["process"], "info" | "spawn" | "wait" | "signal">;
+  readonly process: Pick<Host<"process.info" | "process.spawn">["process"], "info" | "spawn" | "wait" | "signal"> & { readonly signals: ProcessSignals };
   log(line: string): void;
   fail(status: number, message: string): number;
 }

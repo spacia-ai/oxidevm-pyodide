@@ -8,6 +8,7 @@ import { nativeRunner } from "./native-bridge.ts";
 import { bundledEngine, loadPython } from "./python-loader.ts";
 import type { Engine } from "./python-loader.ts";
 import { HOST_ARGV0, placementRefusal, prepareProgram, pythonEnvironment, runProgram } from "./script.ts";
+import { catchInterrupts, createInterrupts, endBySignal } from "./signals.ts";
 import type { Launch } from "./script.ts";
 import type { PythonCommand } from "./shipped.ts";
 import { socketBridge } from "./socket-bridge.ts";
@@ -47,7 +48,8 @@ function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandL
 /**
  * The command: `main(io)` reads the command line as CPython 3.14 does and runs the program it names (a file, the text
  * after -c, or standard input) with the trees of the VM that Python sees mounted. Everything that can be refused is refused
- * before Python starts, so a usage error, a missing file or a directory Python cannot see costs nothing.
+ * before Python starts, so a usage error, a missing file or a directory Python cannot see costs nothing. Ctrl+C is
+ * KeyboardInterrupt once the program runs; left unhandled, it ends the process killed by SIGINT, as with CPython.
  */
 export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks<PythonCommand> {
   const sockets = socketBridge(host);
@@ -68,8 +70,11 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: text => { host.log(text); } }, engine);
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
-      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets });
-      return runProgram(py, prepared.request);
+      const interrupts = createInterrupts();
+      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts });
+      const trap = await catchInterrupts(host.process.signals, interrupts);
+      const outcome = await runProgram(py, prepared.request, () => { interrupts.arm(py); });
+      return outcome.kind === "exit" ? outcome.status : endBySignal(host.process.signals, trap);
     },
     async close() {
       await sockets.closeAll();

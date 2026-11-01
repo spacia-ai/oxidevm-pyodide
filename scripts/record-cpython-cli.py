@@ -35,6 +35,20 @@ PROBE = (
 )
 FAILING = "def fail():\n    raise ValueError('bad value')\nfail()"
 INTERRUPTED = "import atexit; atexit.register(print, 'atexit ran'); raise KeyboardInterrupt"
+# time.sleep's checks of its argument, which the module's interruptible time.sleep repeats.
+SLEEP_ARGUMENTS = """import decimal, fractions, time
+class Index:
+    def __index__(self):
+        return 0
+cases = [("-1", -1), ("nan", float("nan")), ("str", "1"), ("None", None), ("Decimal", decimal.Decimal("0.001")),
+         ("Fraction", fractions.Fraction(1, 1000)), ("2**70", 2**70), ("inf", float("inf")), ("-inf", float("-inf")),
+         ("True", True), ("0", 0), ("0.001", 0.001), ("__index__", Index())]
+for label, value in cases:
+    try:
+        time.sleep(value)
+        print(label, "slept")
+    except Exception as error:
+        print(label, type(error).__name__, error)"""
 
 # The files the cases run, relative to ROOT.
 FILES = {"sub/probe.py": PROBE + "\n", "-dash.py": PROBE + "\n"}
@@ -73,6 +87,7 @@ CASES = [
     ("stdin-traceback", [], FAILING + "\n", "all"),
     ("system-exit-wraps", ["-c", "raise SystemExit(300)"], "", "all"),
     ("keyboard-interrupt", ["-c", INTERRUPTED], "", "all"),
+    ("sleep-arguments", ["-c", SLEEP_ARGUMENTS], "", "all"),
 ]
 
 

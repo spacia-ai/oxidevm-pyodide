@@ -5,6 +5,7 @@ import { kit } from "@oxidevm/sdk/wasm";
 import type { NativeRunRequest } from "@oxidevm/sdk/wasm";
 import type { PyodideInterface } from "pyodide";
 import { installGuest } from "../../src/guest.ts";
+import { catchInterrupts, createInterrupts } from "../../src/signals.ts";
 import { nativeRunner } from "../../src/native-bridge.ts";
 import { parseCommandLine } from "../../src/cli.ts";
 import { prepareProgram, pythonEnvironment, runProgram } from "../../src/script.ts";
@@ -17,6 +18,7 @@ import { fakeProcess } from "./fake-process.ts";
 import type { Child, FakeProcess } from "./fake-process.ts";
 import { fakeSockets } from "./fake-sockets.ts";
 import type { FakeSockets } from "./fake-sockets.ts";
+import { fakeSignals } from "./fake-signals.ts";
 import { fakeStdio } from "./fake-stdio.ts";
 import type { FakeStdio } from "./fake-stdio.ts";
 import { nodeFiles } from "./node-files.ts";
@@ -29,7 +31,8 @@ export type SocketRequest =
   | { readonly operation: "recv"; readonly timeoutMs: unknown; readonly size: unknown };
 
 export interface RunResult {
-  readonly status: number;
+  /** The exit status, or the signal the process ends with because the program left a KeyboardInterrupt unhandled. */
+  readonly status: number | "SIGINT";
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -56,6 +59,8 @@ export interface GuestFixture {
   readonly nativeRequests: NativeRunRequest[];
   /** Every connect, send and recv the Python module made to the socket bridge. */
   readonly socketRequests: SocketRequest[];
+  /** Pyodide's interrupt buffer, as SIGINT's trap hands it over: writing 2 into [0] delivers a Ctrl+C. */
+  readonly interrupts: Int32Array;
   /** Ends the module the way the runner does when `main` returns: aborts its signal and closes leftover sockets. */
   readonly stop: () => Promise<void>;
   /** Writes `source` to a script in the workspace and runs it as `python3 /workspace/<name> args...` would. */
@@ -90,11 +95,13 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     send: (handle, data, timeoutMs) => { socketRequests.push({ operation: "send", timeoutMs }); return realSockets.send(handle, data, timeoutMs); },
     recv: (handle, size, timeoutMs) => { socketRequests.push({ operation: "recv", timeoutMs, size }); return realSockets.recv(handle, size, timeoutMs); },
   };
-  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets };
+  const interrupts = createInterrupts();
+  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets, interrupts };
   const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }));
   for (const tree of [WORKSPACE, TMP]) mountTree(py.FS, files.files, kit.errno, tree);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
   installGuest(py, IDENTITY, bridges);
+  const trap = await catchInterrupts(fakeSignals().signals, interrupts);
 
   async function runCommandLine(args: readonly string[], options: CommandLineOptions = {}): Promise<RunResult> {
     const launch: Launch = { argv0: options.argv0 ?? "python3", args, cwd: options.cwd ?? IDENTITY.cwd, executable: options.executable ?? "/usr/local/bin/python3" };
@@ -110,12 +117,17 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
       return { status: prepared.status, ...stdio.take() };
     }
     py.FS.chdir(launch.cwd);
-    const status = await runProgram(py, prepared.request);
-    return { status, ...stdio.take() };
+    try {
+      const outcome = await runProgram(py, prepared.request, () => { interrupts.arm(py); });
+      return { status: outcome.kind === "exit" ? outcome.status : outcome.signal, ...stdio.take() };
+    } finally {
+      // Each run is a process of its own: Pyodide watches for Ctrl+C only once the next runner arms it again.
+      py.setInterruptBuffer(new Int32Array(1));
+    }
   }
 
   return {
-    py, files, process, sockets, stdio, nativeRequests, socketRequests, runCommandLine,
+    py, files, process, sockets, stdio, nativeRequests, socketRequests, runCommandLine, interrupts: trap.interruptBuffer,
     stop: async () => { lifetime.abort(); await realSockets.closeAll(); },
     async run(source, options = {}) {
       const name = options.name ?? "program.py";

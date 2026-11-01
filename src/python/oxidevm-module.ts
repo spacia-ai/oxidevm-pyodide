@@ -25,11 +25,24 @@ import os as _os
 import types as _types
 
 import _oxidevm_bridge as _bridge
-from pyodide.ffi import JsException, run_sync, to_js
+from pyodide.ffi import run_sync, to_js
 
 __all__ = ["Connection", "connect_tcp", "connect_unix", "run"]
 
 _MAX_RECV = 1024 * 1024
+
+
+def _wait(promise):
+    """Waits for a call of the JavaScript bridge and returns (result, None) or (None, the JavaScript error).
+
+    The bridge resolves with what happened instead of rejecting. Afterwards a Ctrl+C that arrived meanwhile is raised as
+    KeyboardInterrupt, as after any system call in CPython; a wait that it interrupted fails with EINTR.
+    """
+    outcome = run_sync(promise)
+    _bridge.check_interrupt()
+    if outcome.ok:
+        return outcome.value, None
+    return None, outcome.error
 
 
 def run(argv, *, input="", check=True, timeout=10):
@@ -42,7 +55,10 @@ def run(argv, *, input="", check=True, timeout=10):
     The result has pid, returncode (minus the signal number when a signal ended the program), stdout and stderr. When
     check is true, a program that does not exit with status 0 raises RuntimeError with the start of its standard error.
     """
-    reply = _json.loads(run_sync(_bridge.run(_json.dumps(argv), input, round(timeout * 1000))))
+    reply, error = _wait(_bridge.run(_json.dumps(argv), input, round(timeout * 1000)))
+    if error is not None:
+        _bridge.fail(error)
+    reply = _json.loads(reply)
     result = _types.SimpleNamespace(**reply)
     if check and result.returncode != 0:
         raise RuntimeError("Native command exited " + str(result.returncode) + ": " + result.stderr[:4096])
@@ -57,10 +73,10 @@ def _os_error(error):
 
 
 def _call(promise):
-    try:
-        return run_sync(promise)
-    except JsException as error:
+    result, error = _wait(promise)
+    if error is not None:
         raise _os_error(error) from None
+    return result
 
 
 def _milliseconds(seconds, name):

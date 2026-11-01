@@ -29,7 +29,7 @@ export default defineModule({
     process: { kind: "command" },
     commands: ["python", "python3"],
     requires: {
-      host: ["files.async", "files.sync", "process.info", "process.spawn", "sockets.connect"],
+      host: ["files.async", "files.sync", "process.info", "process.signals", "process.spawn", "sockets.connect"],
       browser: ["cross-origin-isolated", "jspi"],
     },
     options: {

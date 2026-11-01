@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyLicense, decodeDeclaration } from "@oxidevm/sdk/wasm";
+import { classifyLicense, COMMANDS_MIN_API, decodeDeclaration, manifestMinApi } from "@oxidevm/sdk/wasm";
 import { describe, expect, it } from "vitest";
 import { RECORDED } from "../scripts/notices.ts";
 import { decodeUpstreamLock } from "../scripts/upstream-lock.ts";
@@ -30,12 +30,18 @@ describe("the manifest", () => {
     expect(manifest.version).toBe("0.2.0");
   });
 
+  it("needs the engine that runs module commands and delivers process.signals (Userspace API 145)", () => {
+    expect(manifest.requires.host).toContain("process.signals");
+    expect(manifestMinApi(manifest)).toBe(145);
+    expect(COMMANDS_MIN_API).toBe(145);
+  });
+
   it("declares a command module for the Emscripten ABI with the host operations the adapter uses", () => {
     expect(manifest.id).toBe("pyodide");
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/u);
     expect(manifest.abi).toBe("emscripten");
     expect(manifest.process).toEqual({ kind: "command" });
-    expect([...manifest.requires.host].sort()).toEqual(["files.async", "files.sync", "process.info", "process.spawn", "sockets.connect"]);
+    expect([...manifest.requires.host].sort()).toEqual(["files.async", "files.sync", "process.info", "process.signals", "process.spawn", "sockets.connect"]);
     expect([...manifest.requires.browser].sort()).toEqual(["cross-origin-isolated", "jspi"]);
   });
 

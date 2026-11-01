@@ -531,6 +531,22 @@
         "kind": "signaled",
         "signal": "SIGINT"
       }
+    },
+    {
+      "name": "sleep-arguments",
+      "argv": [
+        "python3",
+        "-c",
+        "import decimal, fractions, time\nclass Index:\n    def __index__(self):\n        return 0\ncases = [(\"-1\", -1), (\"nan\", float(\"nan\")), (\"str\", \"1\"), (\"None\", None), (\"Decimal\", decimal.Decimal(\"0.001\")),\n         (\"Fraction\", fractions.Fraction(1, 1000)), (\"2**70\", 2**70), (\"inf\", float(\"inf\")), (\"-inf\", float(\"-inf\")),\n         (\"True\", True), (\"0\", 0), (\"0.001\", 0.001), (\"__index__\", Index())]\nfor label, value in cases:\n    try:\n        time.sleep(value)\n        print(label, \"slept\")\n    except Exception as error:\n        print(label, type(error).__name__, error)"
+      ],
+      "stdin": "",
+      "stdout": "-1 ValueError sleep length must be non-negative\nnan ValueError Invalid value NaN (not a number)\nstr TypeError 'str' object cannot be interpreted as an integer or float\nNone TypeError 'NoneType' object cannot be interpreted as an integer or float\nDecimal TypeError 'decimal.Decimal' object cannot be interpreted as an integer or float\nFraction TypeError 'fractions.Fraction' object cannot be interpreted as an integer or float\n2**70 OverflowError timestamp too large to convert to C PyTime_t\ninf OverflowError timestamp out of range for platform time_t\n-inf OverflowError timestamp out of range for platform time_t\nTrue slept\n0 slept\n0.001 slept\n__index__ slept\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
     }
   ]
 }

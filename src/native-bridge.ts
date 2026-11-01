@@ -5,11 +5,26 @@ import type { AsyncFiles } from "./host-types.ts";
 /** The most bytes the JSON text of a native command's arguments may take. */
 export const MAX_ARGUMENT_JSON_BYTES = 64 * 1024;
 
+const EINTR = 4;
+
+/**
+ * A native run that a signal interrupted while the module waited for the program (EINTR); the program has been killed.
+ * Python looks at `code`: when the signal was Ctrl+C, it raises KeyboardInterrupt instead.
+ */
+export class NativeInterrupted extends Error {
+  readonly code = "EINTR";
+
+  constructor(options?: ErrorOptions) {
+    super("Interrupted system call", options);
+    this.name = "NativeInterrupted";
+  }
+}
+
 /** What running a native program needs: the process and pipe operations the manifest declares, the kit and the lifetime. */
 export interface NativeHost {
   readonly files: Pick<AsyncFiles, "read" | "writeAll" | "close">;
   readonly process: Pick<Host<"process.spawn">["process"], "spawn" | "wait" | "signal">;
-  readonly kit: Pick<Host["kit"], "runNative">;
+  readonly kit: Pick<Host["kit"], "runNative" | "errno">;
   /** The module's lifetime: it ends when the module stops, and any running child is killed. */
   readonly signal: AbortSignal;
 }
@@ -41,6 +56,11 @@ export function nativeRunner(host: NativeHost): (argumentsJSON: unknown, input: 
     const argv = decodeArguments(argumentsJSON);
     if (typeof input !== "string") throw new ModuleError("native-request", "Native text input must be a string");
     if (typeof timeoutMs !== "number") throw new ModuleError("native-request", "Native timeout must be a number");
-    return JSON.stringify(await host.kit.runNative(host, { argv, input, timeoutMs, signal: host.signal }));
+    try {
+      return JSON.stringify(await host.kit.runNative(host, { argv, input, timeoutMs, signal: host.signal }));
+    } catch (error: unknown) {
+      if (host.kit.errno.of(error) === EINTR) throw new NativeInterrupted({ cause: error });
+      throw error;
+    }
   };
 }
