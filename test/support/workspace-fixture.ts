@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PyodideInterface } from "pyodide";
 import type { SyncFiles } from "../../src/host-types.ts";
-import { mountWorkspace } from "../../src/workspace-fs.ts";
+import { mountTree, WORKSPACE } from "../../src/workspace-fs.ts";
 import { errno, nodeFiles } from "./node-files.ts";
 import type { NodeFiles } from "./node-files.ts";
 import { startPyodide } from "./pyodide-node.ts";
@@ -33,7 +33,10 @@ export interface WorkspaceHooks {
  * including the errno values, which Emscripten numbers differently from Linux.
  */
 export interface Workspace {
+  /** The directory that stands in for /workspace. */
   readonly root: string;
+  /** The directory that stands in for each mounted VM tree, /workspace included. */
+  readonly trees: Readonly<Record<string, string>>;
   readonly host: NodeFiles;
   readonly py: PyodideInterface;
   /** Runs Python whose last expression is a JSON string, and returns what that decodes to. */
@@ -52,10 +55,13 @@ def failure(operation):
     return None
 `;
 
-export async function startWorkspace(hooks: WorkspaceHooks): Promise<Workspace> {
+/** Mounts /workspace and the other VM trees named, each over a directory of its own. */
+export async function startWorkspace(hooks: WorkspaceHooks, otherTrees: readonly string[] = []): Promise<Workspace> {
   const { faults } = hooks;
-  const root = await mkdtemp(join(tmpdir(), "pyodide-fs-"));
-  const host = nodeFiles(root);
+  const mounted = [WORKSPACE, ...otherTrees];
+  const trees = Object.fromEntries(await Promise.all(mounted.map(async tree => [tree, await mkdtemp(join(tmpdir(), "pyodide-fs-"))] as const)));
+  const root = trees[WORKSPACE] ?? "";
+  const host = nodeFiles(trees);
   const files: SyncFiles = {
     ...host.files,
     open: (path, flags, mode) => { faults.beforeOpen?.(typeof path === "string" ? path : ""); return host.files.open(path, flags, mode); },
@@ -68,10 +74,10 @@ export async function startWorkspace(hooks: WorkspaceHooks): Promise<Workspace> 
     utimes: (path, access, modification, options) => { faults.utimes?.(); host.files.utimes(path, access, modification, options); },
   };
   const py = await startPyodide();
-  mountWorkspace(py.FS, files, errno, error => { hooks.report?.(error); });
+  for (const tree of mounted) mountTree(py.FS, files, errno, tree, error => { hooks.report?.(error); });
 
   return {
-    root, host, py,
+    root, trees, host, py,
     python(code) {
       const text: unknown = py.runPython(`${PRELUDE}${code}`);
       if (typeof text !== "string") throw new Error("the Python code must end with json.dumps(...)");
@@ -82,6 +88,6 @@ export async function startWorkspace(hooks: WorkspaceHooks): Promise<Workspace> 
       await mkdir(join(root, name), { recursive: true });
       return `/workspace/${name}`;
     },
-    dispose: () => rm(root, { recursive: true, force: true }),
+    dispose: async () => { await Promise.all(Object.values(trees).map(directory => rm(directory, { recursive: true, force: true }))); },
   };
 }

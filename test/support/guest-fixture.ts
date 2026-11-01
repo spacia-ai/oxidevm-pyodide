@@ -10,7 +10,7 @@ import { invocationOf, pythonEnvironment, runScript } from "../../src/script.ts"
 import { socketBridge } from "../../src/socket-bridge.ts";
 import type { SocketBridge } from "../../src/socket-bridge.ts";
 import { attachStandardStreams } from "../../src/stdio.ts";
-import { mountWorkspace } from "../../src/workspace-fs.ts";
+import { mountTree, WORKSPACE } from "../../src/workspace-fs.ts";
 import { fakeProcess } from "./fake-process.ts";
 import type { Child, FakeProcess } from "./fake-process.ts";
 import { fakeSockets } from "./fake-sockets.ts";
@@ -74,7 +74,7 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
   };
   const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets };
   const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar" }));
-  mountWorkspace(py.FS, files.files, kit.errno);
+  mountTree(py.FS, files.files, kit.errno, WORKSPACE);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
   installGuest(py, IDENTITY, bridges);
 

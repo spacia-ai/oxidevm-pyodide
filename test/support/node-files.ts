@@ -7,11 +7,6 @@ import type { FileDescriptor, SyncFiles } from "../../src/host-types.ts";
 
 type LinuxTimestamp = Parameters<SyncFiles["utimes"]>[1];
 
-/**
- * A stand-in for the VM's synchronous file API that works on a directory of the test machine: `/workspace` is `root`.
- * It fails the way the host does, with a `LinuxError` that carries the Linux errno, and it keeps file positions the
- * way a file descriptor does, because Node has no `lseek`.
- */
 export interface UtimesCall {
   readonly path: string;
   readonly access: LinuxTimestamp;
@@ -31,7 +26,8 @@ export interface NodeFiles {
   readonly calls: string[];
 }
 
-const WORKSPACE = "/workspace";
+/** VM directories and the directories of the test machine that stand in for them. */
+export type Trees = Readonly<Record<string, string>>;
 
 /** The host's descriptors are branded numbers; a predicate is how a plain number earns the brand without an assertion. */
 function isDescriptor(value: number): value is FileDescriptor {
@@ -42,14 +38,36 @@ function asDescriptor(value: number): FileDescriptor {
   return value;
 }
 
-export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "writeAll">): NodeFiles {
+/** The tree that holds a VM path: the longest one that is the path or one of its parents. */
+function treeOf(trees: Trees, path: string): string | undefined {
+  return Object.keys(trees).filter(tree => path === tree || path.startsWith(`${tree}/`)).sort((left, right) => right.length - left.length)[0];
+}
+
+/**
+ * A stand-in for the VM's synchronous file API that works on directories of the test machine: `/workspace` is `root`,
+ * or each VM directory of `root` is the test directory it names, and every other path does not exist. It fails the way
+ * the host does, with a `LinuxError` that carries the Linux errno, and it keeps file positions the way a file descriptor
+ * does, because Node has no `lseek`.
+ */
+export function nodeFiles(root: string | Trees, standard?: Pick<SyncFiles, "read" | "writeAll">): NodeFiles {
   const calls: string[] = [];
   const utimes: UtimesCall[] = [];
   const positions = new Map<number, number>();
+  const trees: Trees = typeof root === "string" ? { "/workspace": root } : root;
 
   function real(path: string): string {
-    if (path !== WORKSPACE && !path.startsWith(`${WORKSPACE}/`)) throw new LinuxError(2);
-    return join(root, path.slice(WORKSPACE.length));
+    const tree = treeOf(trees, path);
+    const directory = tree === undefined ? undefined : trees[tree];
+    if (tree === undefined || directory === undefined) throw new LinuxError(2);
+    return join(directory, path.slice(tree.length));
+  }
+  /** The VM path of a resolved path of the test machine, as the VM's realpath gives it. */
+  function virtual(resolved: string): string {
+    for (const [tree, directory] of Object.entries(trees).sort(([left], [right]) => right.length - left.length)) {
+      const base = nodeFs.realpathSync(directory);
+      if (resolved === base || resolved.startsWith(`${base}/`)) return `${tree}${resolved.slice(base.length)}`;
+    }
+    throw new LinuxError(2);
   }
   function linuxError(error: unknown): never {
     const code: unknown = error instanceof Error ? Reflect.get(error, "code") : undefined;
@@ -137,7 +155,7 @@ export function nodeFiles(root: string, standard?: Pick<SyncFiles, "read" | "wri
     link(from, to) { guard(() => { nodeFs.linkSync(real(text(from)), real(text(to))); }); },
     symlink(target, path) { calls.push(`symlink ${text(path)}`); guard(() => { nodeFs.symlinkSync(text(target), real(text(path))); }); },
     readlink: path => guard(() => nodeFs.readlinkSync(real(text(path)))),
-    realpath: path => guard(() => nodeFs.realpathSync(real(text(path)))),
+    realpath: path => virtual(guard(() => nodeFs.realpathSync(real(text(path))))),
     readFile: (path, maxBytes) => {
       const bytes = guard(() => nodeFs.readFileSync(real(text(path))));
       if (maxBytes !== undefined && bytes.length > maxBytes) throw new LinuxError(27);

@@ -6,8 +6,16 @@ type LinuxTimestamp = Parameters<SyncFiles["utimes"]>[1];
 /** Emscripten's file system object, which Pyodide exposes as `pyodide.FS`. */
 export type EmscriptenFS = PyodideInterface["FS"];
 
-/** Where the VM's workspace appears in Python. The path is the same in the VM, so no translation is needed. */
+/** The VM's workspace. Every tree appears in Python at the path it has in the VM, so no path is ever translated. */
 export const WORKSPACE = "/workspace";
+/** The VM's /tmp, which hides Pyodide's own (empty) one. */
+export const TMP = "/tmp";
+
+/**
+ * Pyodide's own directories: its root, its standard library and site-packages, its devices, /proc and its home. A home
+ * directory at one of them, inside one, or around one is not mounted, because it would hide files Pyodide needs.
+ */
+export const PYODIDE_DIRECTORIES = ["/", "/lib", "/dev", "/proc", "/home/pyodide"] as const;
 
 /** The most bytes one read or write moves, so that a request for a huge buffer cannot ask the host for the same. */
 export const MAX_TRANSFER_BYTES = 16 * 1024 ** 2;
@@ -21,14 +29,54 @@ const PERMISSION_BITS = 0o7777;
 const MKNOD_ANY_MODE = 0o777;
 const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
 
+/** An absolute path with `.`, `..`, empty components and a trailing slash resolved by name, as the kernel walks it. */
+export function normalizePath(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+/** Whether a normalised path is the tree itself or below it. */
+export function within(path: string, tree: string): boolean {
+  return tree === "/" ? path.startsWith("/") : path === tree || path.startsWith(`${tree}/`);
+}
+
+/** Whether a directory of the VM is there and is a directory (following symbolic links, as Linux opens it). */
+function isDirectory(files: Pick<SyncFiles, "stat">, path: string): boolean {
+  try {
+    return (files.stat(path).mode & 0o170000) === 0o040000;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Mounts the VM's `/workspace` into Pyodide's file system. Every operation goes to the VM's own file API, so Linux keeps
- * ownership of permissions, atomic renames and locking, and a file that Python writes is at once the file Linux reads.
+ * The VM directories Python sees, each at its own path: the workspace, /tmp, and the home directory when it is an existing
+ * directory that is neither at, inside nor around one of Pyodide's own directories nor already inside the other two.
+ * A tree the VM does not have is left out.
+ */
+export function visibleTrees(home: string | undefined, files: Pick<SyncFiles, "stat">): readonly string[] {
+  const trees = [WORKSPACE, TMP].filter(tree => isDirectory(files, tree));
+  if (home === undefined || !home.startsWith("/")) return trees;
+  const directory = normalizePath(home);
+  const hidesPyodide = PYODIDE_DIRECTORIES.some(own => within(own, directory) || (own !== "/" && within(directory, own)));
+  const shown = [WORKSPACE, TMP].some(tree => within(directory, tree));
+  return hidesPyodide || shown || !isDirectory(files, directory) ? trees : [...trees, directory];
+}
+
+/**
+ * Mounts a directory of the VM at the same path in Pyodide's file system. Every operation goes to the VM's own file API,
+ * so Linux keeps ownership of permissions, atomic renames and locking, and a file that Python writes is at once the file
+ * Linux reads. A rename from one mounted tree to another fails with EXDEV, as between two file systems.
  * A failed host call becomes the matching `OSError` (the host reports a Linux errno and Emscripten numbers errors
  * differently, so `errno` translates). Anything else that a host call throws is handed to `report` and becomes `EIO`:
  * an exception that is not an errno would unwind through the interpreter's frames, and Pyodide treats that as fatal.
  */
-export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErrno, report: (error: unknown) => void = () => undefined): void {
+export function mountTree(fs: EmscriptenFS, files: SyncFiles, errno: KitErrno, tree: string, report: (error: unknown) => void = () => undefined): void {
   /** A file Emscripten has created but not yet opened: the stream that will own it once `chmod` supplies its real mode. */
   const creating = new WeakMap<FS.FSNode, FS.FSStream | null>();
   const descriptors = new Map<FS.FSStream, FileDescriptor>();
@@ -187,6 +235,6 @@ export function mountWorkspace(fs: EmscriptenFS, files: SyncFiles, errno: KitErr
     }),
   };
 
-  fs.mkdirTree(WORKSPACE);
-  fs.mount({ mount: () => make(null, "/", files.stat(WORKSPACE).mode), syncfs: (_mount, _populate, done) => { done(null); } }, {}, WORKSPACE);
+  fs.mkdirTree(tree);
+  fs.mount({ mount: () => make(null, "/", files.stat(tree).mode), syncfs: (_mount, _populate, done) => { done(null); } }, {}, tree);
 }

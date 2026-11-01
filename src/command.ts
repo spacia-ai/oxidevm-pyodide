@@ -8,7 +8,7 @@ import type { Engine } from "./python-loader.ts";
 import { invocationOf, pythonEnvironment, readScript, runScript, USAGE } from "./script.ts";
 import { socketBridge } from "./socket-bridge.ts";
 import { attachStandardStreams } from "./stdio.ts";
-import { mountWorkspace } from "./workspace-fs.ts";
+import { mountTree, WORKSPACE } from "./workspace-fs.ts";
 
 /**
  * The command: `main(io)` runs the Python program named by the first argument and returns its exit status. A missing
@@ -25,7 +25,7 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
 
       const identity = guestProcess(await host.process.info(), io.cwd);
       const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: line => { host.log(line); } }, engine);
-      mountWorkspace(py.FS, host.fs, host.kit.errno, error => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); });
+      mountTree(py.FS, host.fs, host.kit.errno, WORKSPACE, error => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); });
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno);
       installGuest(py, identity, { run: nativeRunner(host), sockets });
       return runScript(py, invocation, source.text);
