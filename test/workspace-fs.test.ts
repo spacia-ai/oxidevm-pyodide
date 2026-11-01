@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { LinuxError } from "@oxidevm/sdk/js-process";
 import type { PyodideInterface } from "pyodide";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -384,7 +384,10 @@ describe("special files", () => {
     const dir = await directory("with-socket");
     await writeFile(join(root, "with-socket/helper_in_socket_dir.py"), "VALUE = 'imported from the directory with the socket'\n");
     const server = createServer();
-    await new Promise<void>(resolve => { server.listen(join(root, "with-socket/service.sock"), resolve); });
+    // A socket's path holds at most 107 bytes, which a long temporary directory exceeds: bind by the shorter of the
+    // absolute path and the path from the working directory.
+    const socket = join(root, "with-socket/service.sock"), fromHere = relative(process.cwd(), socket);
+    await new Promise<void>(resolve => { server.listen(fromHere.length < socket.length ? fromHere : socket, resolve); });
     try {
       const seen = python(`
 import stat, sys
