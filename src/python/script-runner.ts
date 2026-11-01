@@ -4,7 +4,9 @@
  * a namespace of its own that holds `_request`, a dict with the program's `filename` (its absolute path, `<string>` or
  * `<stdin>`), its `source`, `argv`, `orig_argv`, `executable`, `path0` (for `sys.path[0]`), `file` (for `__file__`, or None)
  * and `cache_source` (whether tracebacks may show the source, as CPython 3.13+ does for -c). Errors are printed as Python
- * prints them, without this runner's own frames, so that the output looks like the program's. A KeyboardInterrupt the
+ * prints them, without this runner's own frames, the frames of this module's replacements of built-ins (which run as
+ * `<exec>`) or the frames of Pyodide's JavaScript, so that the output looks like the program's under CPython, where a
+ * built-in such as `time.sleep` shows no frame of its own. A KeyboardInterrupt the
  * program leaves unhandled is printed the same way and answered with "SIGINT", after atexit has run, so that the process
  * can end killed by SIGINT as CPython's does. `_request["arm"]` (or None) makes Pyodide watch for Ctrl+C; the runner calls
  * it inside its own `try`, so that no KeyboardInterrupt, not even one that arrived before the program started or while
@@ -20,11 +22,26 @@ import types as _types
 from _pyodide._base import eval_code_async as _eval_code_async
 
 
+def _shown(filename):
+    """Whether a frame is the program's or a Python module's: not a replacement of a built-in, not JavaScript."""
+    if filename == "<exec>":
+        return False
+    return not ("://" in filename or filename.startswith("node:") or filename.endswith((".js", ".mjs", ".cjs", ".ts")))
+
+
 def _user_traceback(error):
     entry = error.__traceback__
     while entry is not None and entry.tb_frame.f_code.co_filename != _request["filename"]:
         entry = entry.tb_next
-    return entry
+    kept = []
+    while entry is not None:
+        if _shown(entry.tb_frame.f_code.co_filename):
+            kept.append(entry)
+        entry = entry.tb_next
+    shown = None
+    for item in reversed(kept):
+        shown = _types.TracebackType(shown, item.tb_frame, item.tb_lasti, item.tb_lineno)
+    return shown
 
 
 def _requested_status(code):

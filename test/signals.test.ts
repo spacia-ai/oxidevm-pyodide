@@ -172,7 +172,9 @@ describe("Ctrl+C in the program", () => {
     const result = await guest.run("import time\nprint('ready', flush=True)\ntime.sleep(60)\nprint('not reached')\n");
     expect(performance.now() - began).toBeLessThan(10_000);
     expect(result).toMatchObject({ status: "SIGINT", stdout: "ready\n" });
-    expect(result.stderr).toMatch(/line 3, in <module>\n {4}time\.sleep\(60\)\n[\s\S]*KeyboardInterrupt\n$/u);
+    // CPython 3.14.4 prints exactly this when SIGINT arrives during the same sleep; no frame of the replacement or of
+    // Pyodide's JavaScript appears.
+    expect(result.stderr).toBe('Traceback (most recent call last):\n  File "/workspace/program.py", line 3, in <module>\n    time.sleep(60)\n    ~~~~~~~~~~^^^^\nKeyboardInterrupt\n');
   });
 
   it("sleeps for as long as asked when nothing interrupts it, with CPython's checks of the argument", async () => {

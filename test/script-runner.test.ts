@@ -64,6 +64,25 @@ describe("errors", () => {
     expect(lines.findIndex(line => line.includes("line 7"))).toBeLessThan(lines.findIndex(line => line.includes("line 2")));
   });
 
+  it("shows no frame of its own replacement of time.sleep, as CPython shows none for the built-in", async () => {
+    // CPython 3.14.4 (/usr/bin/python3.14 -I) prints exactly this for the same program at the same path.
+    expect(await guest.run("import time\ntime.sleep('x')\n")).toEqual({
+      status: 1,
+      stdout: "",
+      stderr: "Traceback (most recent call last):\n  File \"/workspace/program.py\", line 2, in <module>\n    time.sleep('x')\n    ~~~~~~~~~~^^^^^\nTypeError: 'str' object cannot be interpreted as an integer or float\n",
+    });
+  });
+
+  it("keeps the program's frames on both sides of JavaScript and drops the JavaScript ones", async () => {
+    const result = await guest.run('import js\n\ndef callback():\n    raise ValueError("in the callback")\n\njs.Function.new("f", "return f()")(callback)\n');
+    expect(result.status).toBe(1);
+    const lines = result.stderr.trimEnd().split("\n");
+    expect(lines).toContain('  File "/workspace/program.py", line 6, in <module>');
+    expect(lines).toContain('  File "/workspace/program.py", line 4, in callback');
+    expect(lines.at(-1)).toBe("ValueError: in the callback");
+    expect(result.stderr).not.toMatch(/:\/\/|\.m?js"|\.ts"|<exec>/u);
+  });
+
   it("reports a syntax error with its place, without a traceback of the runner", async () => {
     const result = await guest.run("x = 1\nif True print(x)\n");
     expect(result.status).toBe(1);

@@ -229,7 +229,10 @@ export async function commandSleepInterrupt(context: Context): Promise<string> {
   await session.type("exit");
   await session.handle.exit;
   check(shown.includes("s2=130") && shown.includes("KeyboardInterrupt") && took < 10_000, `time.sleep did not end by SIGINT at once (${String(took)} ms): ${JSON.stringify(shown.slice(-600))}`);
-  return `Ctrl+C ended time.sleep(600) in ${String(took)} ms, with a traceback and status 130`;
+  // CPython's traceback exactly: no frame of the module's own time.sleep or of Pyodide's JavaScript.
+  const traceback = `Traceback (most recent call last):\n  File "${WORK}/sleeper.py", line 3, in <module>\n    time.sleep(600)\n    ~~~~~~~~~~^^^^^\nKeyboardInterrupt\n`;
+  check(shown.replaceAll("\r\n", "\n").includes(traceback), `the traceback is not CPython's: ${JSON.stringify(shown.slice(-600))}`);
+  return `Ctrl+C ended time.sleep(600) in ${String(took)} ms, with CPython's traceback and status 130`;
 }
 
 export async function commandDisabled(context: Context): Promise<string> {
