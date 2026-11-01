@@ -1,0 +1,520 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "interpreter": "/usr/bin/python3.14",
+    "version": "3.14.4",
+    "build": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "recorded": "2026-11-01",
+    "recorder": "scripts/record-cpython-cli.py",
+    "command": "python3.14 -I scripts/record-cpython-cli.py",
+    "cwd": "/tmp/oxidevm-pyodide-cli",
+    "argv0": "python3",
+    "executable": "/tmp/oxidevm-pyodide-cli/bin/python3",
+    "environment": {
+      "PATH": "/tmp/oxidevm-pyodide-cli/bin",
+      "HOME": "/tmp/oxidevm-pyodide-cli",
+      "LC_ALL": "C.UTF-8"
+    },
+    "stdin": "a pipe (never a terminal); empty unless the case gives text"
+  },
+  "files": {
+    "sub/probe.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+    "-dash.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n"
+  },
+  "cases": [
+    {
+      "name": "file-with-arguments",
+      "argv": [
+        "python3",
+        "sub/probe.py",
+        "one",
+        "two words"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"sub/probe.py\", \"one\", \"two words\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"sub/probe.py\", \"one\", \"two words\"], \"path0\": \"/tmp/oxidevm-pyodide-cli/sub\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "file-relative-with-dots",
+      "argv": [
+        "python3",
+        "./sub/../sub/probe.py"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"./sub/../sub/probe.py\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/./sub/../sub/probe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/./sub/../sub/probe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"./sub/../sub/probe.py\"], \"path0\": \"/tmp/oxidevm-pyodide-cli/sub\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "code-with-arguments",
+      "argv": [
+        "python3",
+        "-c",
+        "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))",
+        "one",
+        "--two"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"-c\", \"one\", \"--two\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": null, \"filename\": \"<string>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-c\", \"import json, sys; print(json.dumps({\\\"argv\\\": sys.argv, \\\"orig_argv\\\": sys.orig_argv, \\\"executable\\\": sys.executable, \\\"path0\\\": sys.path[0], \\\"file\\\": globals().get(\\\"__file__\\\"), \\\"filename\\\": sys._getframe(0).f_code.co_filename, \\\"name\\\": __name__}, sort_keys=True))\", \"one\", \"--two\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "code-attached-to-option",
+      "argv": [
+        "python3",
+        "-cimport json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"-c\", \"one\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": null, \"filename\": \"<string>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-cimport json, sys; print(json.dumps({\\\"argv\\\": sys.argv, \\\"orig_argv\\\": sys.orig_argv, \\\"executable\\\": sys.executable, \\\"path0\\\": sys.path[0], \\\"file\\\": globals().get(\\\"__file__\\\"), \\\"filename\\\": sys._getframe(0).f_code.co_filename, \\\"name\\\": __name__}, sort_keys=True))\", \"one\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "stdin-dash-with-arguments",
+      "argv": [
+        "python3",
+        "-",
+        "one",
+        "two"
+      ],
+      "stdin": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+      "stdout": "{\"argv\": [\"-\", \"one\", \"two\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"<stdin>\", \"filename\": \"<stdin>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-\", \"one\", \"two\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "stdin-without-arguments",
+      "argv": [
+        "python3"
+      ],
+      "stdin": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+      "stdout": "{\"argv\": [\"\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"<stdin>\", \"filename\": \"<stdin>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "stdin-after-double-dash",
+      "argv": [
+        "python3",
+        "--"
+      ],
+      "stdin": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+      "stdout": "{\"argv\": [\"\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"<stdin>\", \"filename\": \"<stdin>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"--\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "version-short",
+      "argv": [
+        "python3",
+        "-V"
+      ],
+      "stdin": "",
+      "stdout": "Python 3.14.4\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "version-long",
+      "argv": [
+        "python3",
+        "--version"
+      ],
+      "stdin": "",
+      "stdout": "Python 3.14.4\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "version-before-code",
+      "argv": [
+        "python3",
+        "-V",
+        "-c",
+        "print(1)"
+      ],
+      "stdin": "",
+      "stdout": "Python 3.14.4\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "version-then-unknown-option",
+      "argv": [
+        "python3",
+        "-V",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Unknown option: -Z\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "help-short",
+      "argv": [
+        "python3",
+        "-h"
+      ],
+      "stdin": "",
+      "stdout": "usage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\n",
+      "stdoutKept": "first-line",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "help-long",
+      "argv": [
+        "python3",
+        "--help"
+      ],
+      "stdin": "",
+      "stdout": "usage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\n",
+      "stdoutKept": "first-line",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "help-before-unknown-option",
+      "argv": [
+        "python3",
+        "-h",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "usage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\n",
+      "stdoutKept": "first-line",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "unknown-option",
+      "argv": [
+        "python3",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Unknown option: -Z\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "unknown-option-in-group",
+      "argv": [
+        "python3",
+        "-uZ"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Unknown option: -Z\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "unknown-long-option",
+      "argv": [
+        "python3",
+        "--foo"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Unknown option: --foo\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "long-option-in-group",
+      "argv": [
+        "python3",
+        "-u-x"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Unknown option: -u-x\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "empty-long-option-in-group",
+      "argv": [
+        "python3",
+        "-u-",
+        "sub/probe.py"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"sub/probe.py\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-u-\", \"sub/probe.py\"], \"path0\": \"/tmp/oxidevm-pyodide-cli/sub\"}\n",
+      "stdoutKept": "all",
+      "stderr": "Expected long option\n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "code-without-argument",
+      "argv": [
+        "python3",
+        "-c"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Argument expected for the -c option\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "grouped-code-without-argument",
+      "argv": [
+        "python3",
+        "-uc"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Argument expected for the -c option\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "double-dash-before-file",
+      "argv": [
+        "python3",
+        "--",
+        "sub/probe.py",
+        "-c",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"sub/probe.py\", \"-c\", \"-Z\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"--\", \"sub/probe.py\", \"-c\", \"-Z\"], \"path0\": \"/tmp/oxidevm-pyodide-cli/sub\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "options-after-file-are-arguments",
+      "argv": [
+        "python3",
+        "sub/probe.py",
+        "-c",
+        "-Z"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"sub/probe.py\", \"-c\", \"-Z\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/sub/probe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"sub/probe.py\", \"-c\", \"-Z\"], \"path0\": \"/tmp/oxidevm-pyodide-cli/sub\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "grouped-flags-with-code",
+      "argv": [
+        "python3",
+        "-uc",
+        "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"-c\", \"one\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": null, \"filename\": \"<string>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-uc\", \"import json, sys; print(json.dumps({\\\"argv\\\": sys.argv, \\\"orig_argv\\\": sys.orig_argv, \\\"executable\\\": sys.executable, \\\"path0\\\": sys.path[0], \\\"file\\\": globals().get(\\\"__file__\\\"), \\\"filename\\\": sys._getframe(0).f_code.co_filename, \\\"name\\\": __name__}, sort_keys=True))\", \"one\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "ignored-flags",
+      "argv": [
+        "python3",
+        "-u",
+        "-B",
+        "-E",
+        "-s",
+        "-q",
+        "-c",
+        "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"-c\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": null, \"filename\": \"<string>\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-u\", \"-B\", \"-E\", \"-s\", \"-q\", \"-c\", \"import json, sys; print(json.dumps({\\\"argv\\\": sys.argv, \\\"orig_argv\\\": sys.orig_argv, \\\"executable\\\": sys.executable, \\\"path0\\\": sys.path[0], \\\"file\\\": globals().get(\\\"__file__\\\"), \\\"filename\\\": sys._getframe(0).f_code.co_filename, \\\"name\\\": __name__}, sort_keys=True))\"], \"path0\": \"\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "file-name-starting-with-dash",
+      "argv": [
+        "python3",
+        "--",
+        "-dash.py",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"-dash.py\", \"one\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/-dash.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/-dash.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"--\", \"-dash.py\", \"one\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "missing-file",
+      "argv": [
+        "python3",
+        "missing.py"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "python3: can't open file '/tmp/oxidevm-pyodide-cli/missing.py': [Errno 2] No such file or directory\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "code-traceback",
+      "argv": [
+        "python3",
+        "-c",
+        "def fail():\n    raise ValueError('bad value')\nfail()"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\n    fail()\n    ~~~~^^\n  File \"<string>\", line 2, in fail\n    raise ValueError('bad value')\nValueError: bad value\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "stdin-traceback",
+      "argv": [
+        "python3"
+      ],
+      "stdin": "def fail():\n    raise ValueError('bad value')\nfail()\n",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 3, in <module>\n  File \"<stdin>\", line 2, in fail\nValueError: bad value\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "system-exit-wraps",
+      "argv": [
+        "python3",
+        "-c",
+        "raise SystemExit(300)"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 44
+      }
+    },
+    {
+      "name": "keyboard-interrupt",
+      "argv": [
+        "python3",
+        "-c",
+        "import atexit; atexit.register(print, 'atexit ran'); raise KeyboardInterrupt"
+      ],
+      "stdin": "",
+      "stdout": "atexit ran\n",
+      "stdoutKept": "all",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import atexit; atexit.register(print, 'atexit ran'); raise KeyboardInterrupt\n                                                         ^^^^^^^^^^^^^^^^^^^^^^^\nKeyboardInterrupt\n",
+      "exit": {
+        "kind": "signaled",
+        "signal": "SIGINT"
+      }
+    }
+  ]
+}
