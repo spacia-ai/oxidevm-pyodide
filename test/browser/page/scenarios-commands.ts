@@ -139,13 +139,16 @@ export async function commandSleepInterrupt(context: Context): Promise<string> {
   // In a file, so that the terminal's echo of the typed line cannot contain what the program prints.
   await context.vm.workspace.writeText("_oxidevm/sleeper.py", "import time\nprint('asleep', flush=True)\ntime.sleep(600)\n");
   const session = await terminal(context.vm, "/bin/sh", ["-i"]);
-  await session.type(`python3 ${WORK}/sleeper.py; ${PRINT_STATUS}`);
+  // On a line of its own: an interactive shell drops the rest of a line once a Ctrl+C has killed its command.
+  await session.type(`python3 ${WORK}/sleeper.py`);
   await session.output.waitFor("asleep");
   await sleep(300);
   const pressed = performance.now();
   await session.handle.interrupt();
-  await session.output.waitFor("s2=");
+  await session.output.waitFor("KeyboardInterrupt");
   const took = Math.round(performance.now() - pressed);
+  await session.type(PRINT_STATUS);
+  await session.output.waitFor("s2=");
   await sleep(300);
   const shown = session.output.text;
   await session.type("exit");
