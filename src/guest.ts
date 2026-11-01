@@ -1,5 +1,6 @@
 import type { PyodideInterface } from "pyodide";
 import type { nativeRunner } from "./native-bridge.ts";
+import { HIDE_BRIDGE_SOURCE } from "./python/hide-bridge.ts";
 import { PROCESS_PATCH_SOURCE } from "./python/process-patch.ts";
 import { OXIDEVM_MODULE_SOURCE } from "./python/oxidevm-module.ts";
 import { SLEEP_PATCH_SOURCE } from "./python/sleep-patch.ts";
@@ -17,6 +18,17 @@ export interface ProcessIdentity {
 
 /** How a wait of the bridge ended: it never rejects, so that a wait Python gives up leaves no failure behind. */
 type Outcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };
+
+/** Runs Python in a namespace of its own, so that its names stay out of the globals of Pyodide's own __main__. */
+function runIsolated(py: PyodideInterface, source: string): void {
+  const namespace: unknown = py.toPy({});
+  if (!(namespace instanceof py.ffi.PyProxy)) throw new Error("Pyodide did not convert an empty namespace to a Python dict");
+  try {
+    py.runPython(source, { globals: namespace });
+  } finally {
+    namespace.destroy();
+  }
+}
 
 export interface GuestBridges {
   readonly run: ReturnType<typeof nativeRunner>;
@@ -51,16 +63,17 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
   });
   py.registerJsModule("_oxidevm_process", { pid: identity.pid, uid: identity.uid, gid: identity.gid, cwd: identity.cwd });
   py.runPython(PROCESS_PATCH_SOURCE);
-  // A namespace of its own, so that the patch's names stay out of the globals of Pyodide's own __main__.
-  const namespace: unknown = py.toPy({});
-  if (!(namespace instanceof py.ffi.PyProxy)) throw new Error("Pyodide did not convert an empty namespace to a Python dict");
-  try {
-    py.runPython(SLEEP_PATCH_SOURCE, { globals: namespace });
-  } finally {
-    namespace.destroy();
-  }
+  runIsolated(py, SLEEP_PATCH_SOURCE);
   const sitePackages: unknown = py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
   if (typeof sitePackages !== "string") throw new Error("Pyodide did not report its site-packages directory");
   py.FS.writeFile(`${sitePackages}/oxidevm.py`, OXIDEVM_MODULE_SOURCE);
   py.runPython("import importlib\nimportlib.invalidate_caches()");
+}
+
+/**
+ * Hides Pyodide's bridge to JavaScript from the program, which a program started as a command must not import (engine
+ * ADR 0027): see src/python/hide-bridge.ts. Call it after `installGuest`, whose `oxidevm` module it imports first.
+ */
+export function hideJavaScript(py: PyodideInterface): void {
+  runIsolated(py, HIDE_BRIDGE_SOURCE);
 }

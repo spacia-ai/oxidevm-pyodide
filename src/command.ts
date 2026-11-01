@@ -2,7 +2,7 @@ import type { CommandHooks, CommandIO } from "@oxidevm/sdk/wasm";
 import { helpText, interactiveRefusal, parseCommandLine, usageError, versionText } from "./cli.ts";
 import type { CommandLine } from "./cli.ts";
 import { guestProcess } from "./identity.ts";
-import { installGuest } from "./guest.ts";
+import { hideJavaScript, installGuest } from "./guest.ts";
 import type { CommandHost } from "./host-types.ts";
 import { nativeRunner } from "./native-bridge.ts";
 import { bundledEngine, loadPython } from "./python-loader.ts";
@@ -72,6 +72,8 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
       const interrupts = createInterrupts();
       installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts });
+      // Defence in depth, not a boundary: a program in the VM must not reach the page's JavaScript through Python.
+      if (io.invocation.kind === "command") hideJavaScript(py);
       const trap = await catchInterrupts(host.process.signals, interrupts);
       const outcome = await runProgram(py, prepared.request, () => { interrupts.arm(py); });
       return outcome.kind === "exit" ? outcome.status : endBySignal(host.process.signals, trap);

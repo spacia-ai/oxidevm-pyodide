@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { LinuxError } from "@oxidevm/sdk/js-process";
 import { kit } from "@oxidevm/sdk/wasm";
 import type { CommandIO, Terminals } from "@oxidevm/sdk/wasm";
+import type { PyodideInterface } from "pyodide";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PYTHON_VERSION } from "../src/cli.ts";
 import { createCommand } from "../src/command.ts";
@@ -68,6 +69,8 @@ interface SetupOptions {
   readonly terminal?: { readonly columns: number; readonly rows: number };
   /** A Ctrl+C arrives as soon as SIGINT is trapped. */
   readonly interruptAtTrap?: boolean;
+  /** Runs in Pyodide as soon as it has started, before the command sets it up. */
+  readonly prepare?: (py: PyodideInterface) => void;
 }
 
 function setup(options: SetupOptions = {}): Setup {
@@ -97,7 +100,13 @@ function setup(options: SetupOptions = {}): Setup {
   const engine: Engine = {
     scope: { fetch: () => Promise.reject(new Error("no network in tests")) },
     createPyodideModule: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")),
-    loadPyodide: options => { startedWith.push(options); events.push("load"); return startPyodide(options.env); },
+    loadPyodide: async started => {
+      startedWith.push(started);
+      events.push("load");
+      const py = await startPyodide(started.env);
+      options.prepare?.(py);
+      return py;
+    },
   };
   const command = createCommand(host, engine);
   return {
@@ -282,6 +291,53 @@ describe("a command that runs", { timeout: 30_000 }, () => {
     expect(await s.main(["-c", "try:\n    raise KeyboardInterrupt\nexcept KeyboardInterrupt:\n    print('handled')"])).toBe(0);
     expect(s.stdio.take().stdout).toBe("handled\n");
     expect(s.events).toEqual(["load", "trap SIGINT"]);
+    await s.close();
+  });
+
+  it("hides the JavaScript bridge from a program started as a command, and keeps what Python itself needs working", async () => {
+    // A submodule of the bridge that is already loaded is hidden too.
+    const s = setup({ prepare: py => { py.runPython("import pyodide.ffi.wrappers"); } });
+    const program = `import asyncio, importlib, time
+results = []
+for name in ("js", "pyodide_js", "pyodide.ffi", "pyodide.http", "pyodide.code", "pyodide.ffi.wrappers"):
+    try:
+        importlib.import_module(name)
+        results.append(name + " imported")
+    except ModuleNotFoundError as error:
+        results.append(name + " refused " + str(error.name))
+try:
+    from pyodide import ffi
+    results.append("from pyodide import ffi: imported")
+except ImportError as error:
+    results.append("from pyodide import ffi: " + type(error).__name__)
+import pyodide
+results.append("attributes " + str([name for name in ("ffi", "http", "code") if hasattr(pyodide, name)]))
+async def main():
+    await asyncio.sleep(0)
+    return "asyncio.run works"
+results.append(asyncio.run(main()))
+time.sleep(0)
+import oxidevm
+with oxidevm.connect_unix("/workspace/_oxidevm/echo.sock") as connection:
+    connection.sendall(b"hi")
+    results.append("oxidevm " + str(connection.recv(10)))
+print("\\n".join(results))
+import js`;
+    expect(await s.main(["-c", program])).toBe(1);
+    const { stdout, stderr } = s.stdio.take();
+    expect(stdout).toBe([
+      "js refused js", "pyodide_js refused pyodide_js", "pyodide.ffi refused pyodide.ffi", "pyodide.http refused pyodide.http",
+      "pyodide.code refused pyodide.code", "pyodide.ffi.wrappers refused pyodide.ffi", "from pyodide import ffi: ImportError", "attributes []",
+      "asyncio.run works", "oxidevm b'HI'", "",
+    ].join("\n"));
+    expect(stderr.trimEnd().split("\n").at(-1)).toBe("ModuleNotFoundError: No module named 'js' (a program run as a command cannot reach JavaScript)");
+    await s.close();
+  });
+
+  it("keeps the JavaScript bridge for a program the application starts", async () => {
+    const s = setup();
+    expect(await s.main(["-c", "import js, pyodide_js\nfrom pyodide.ffi import run_sync\nfrom pyodide.code import run_js\nprint(type(js).__name__, run_js('1 + 1'))"], { invocation: APPLICATION })).toBe(0);
+    expect(s.stdio.take()).toEqual({ stdout: "JsProxy 2\n", stderr: "" });
     await s.close();
   });
 
