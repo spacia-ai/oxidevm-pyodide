@@ -64,11 +64,11 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin }, launch, line);
       if (prepared.kind === "failed") return host.fail(prepared.status, prepared.message);
 
-      const identity = guestProcess(await host.process.info(), launch.cwd);
+      const info = await host.process.info();
       const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: text => { host.log(text); } }, engine);
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
-      attachStandardStreams(py, host.fs, host.stdio, host.kit.errno);
-      installGuest(py, identity, { run: nativeRunner(host), sockets });
+      attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
+      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets });
       return runProgram(py, prepared.request);
     },
     async close() {

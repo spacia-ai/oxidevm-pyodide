@@ -86,3 +86,27 @@ describe("standard input", () => {
     expect(evaluate(attempt)).toBe("OSError EIO");
   });
 });
+
+describe("terminals", () => {
+  // Each case attaches the streams again, as the command does once per process, then asks Python what it sees.
+  const ask = 'import json, os, shutil, sys\ndef size(fd):\n    try:\n        return list(os.get_terminal_size(fd))\n    except OSError as error:\n        return error.__class__.__name__\njson.dumps({"isatty": [sys.stdin.isatty(), sys.stdout.isatty(), sys.stderr.isatty()], "os": [os.isatty(0), os.isatty(1), os.isatty(2)], "size": [size(0), size(1), size(2)], "shutil": list(shutil.get_terminal_size((1, 1)))})';
+  const reattach = (terminals: { readonly stdin: boolean; readonly stdout: boolean; readonly stderr: boolean }, size: { readonly columns: number; readonly rows: number } | null): void => {
+    attachStandardStreams(py, stdio.files, stdio.streams, kit.errno, terminals, size);
+  };
+  afterEach(() => { reattach({ stdin: false, stdout: false, stderr: false }, null); });
+
+  it("are what the process has: a terminal on each descriptor the caller's terminal is on, with its size", () => {
+    reattach({ stdin: true, stdout: true, stderr: false }, { columns: 132, rows: 43 });
+    expect(JSON.parse(String(evaluate(ask)))).toEqual({ isatty: [true, true, false], os: [true, true, false], size: [[80, 24], [132, 43], "OSError"], shutil: [132, 43] });
+  });
+
+  it("are none for pipes and files, which have no size, so that programs do not colour or page their output", () => {
+    reattach({ stdin: false, stdout: false, stderr: false }, { columns: 132, rows: 43 });
+    expect(JSON.parse(String(evaluate(ask)))).toEqual({ isatty: [false, false, false], os: [false, false, false], size: ["OSError", "OSError", "OSError"], shutil: [1, 1] });
+  });
+
+  it("have the usual 80 by 24 when the process has a terminal of unknown size", () => {
+    reattach({ stdin: false, stdout: true, stderr: true }, null);
+    expect(JSON.parse(String(evaluate(ask)))).toMatchObject({ isatty: [false, true, true], size: ["OSError", [80, 24], [80, 24]] });
+  });
+});

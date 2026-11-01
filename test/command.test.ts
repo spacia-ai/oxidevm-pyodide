@@ -57,7 +57,14 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-function setup(options: { readonly bytes?: CommandHost["artifacts"]["bytes"]; readonly fs?: (files: ReturnType<typeof nodeFiles>["files"]) => CommandHost["fs"] } = {}): Setup {
+interface SetupOptions {
+  readonly bytes?: CommandHost["artifacts"]["bytes"];
+  readonly fs?: (files: ReturnType<typeof nodeFiles>["files"]) => CommandHost["fs"];
+  /** The size of the process's terminal, as the VM reports it. */
+  readonly terminal?: { readonly columns: number; readonly rows: number };
+}
+
+function setup(options: SetupOptions = {}): Setup {
   const stdio = fakeStdio();
   const files = nodeFiles({ "/workspace": join(root, "workspace"), "/tmp": join(root, "tmp"), "/home/user": join(root, "home") }, stdio.files);
   const children = fakeProcess(() => ({}));
@@ -76,7 +83,7 @@ function setup(options: { readonly bytes?: CommandHost["artifacts"]["bytes"]; re
     fs: options.fs?.(files.files) ?? files.files,
     files: children.host.files,
     sockets: sockets.sockets,
-    process: { ...children.host.process, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: null }) },
+    process: { ...children.host.process, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: options.terminal ?? null }) },
     log: line => { logs.push(line); toStderr(line); },
     fail: (status, message) => { failures.push(`${String(status)}: ${message}`); toStderr(message); return status; },
   };
@@ -211,6 +218,13 @@ describe("a command that runs", () => {
     expect(await s.main(["-", "one"], { invocation: APPLICATION, stdin: "import sys\nprint(sys.argv, __file__, repr(sys.stdin.read()), repr(sys.executable), sys.orig_argv)\n" })).toBe(0);
     // An application start has no path, so sys.executable is empty, as CPython reports an executable it cannot find.
     expect(s.stdio.take()).toEqual({ stdout: "['-', 'one'] <stdin> '' '' ['pyodide', '-', 'one']\n", stderr: "" });
+    await s.close();
+  });
+
+  it("tells Python which descriptors are terminals, and the size of the terminal the process has", async () => {
+    const s = setup({ terminal: { columns: 120, rows: 40 } });
+    expect(await s.main(["-c", "import os, sys\nprint(sys.stdin.isatty(), sys.stdout.isatty(), sys.stderr.isatty(), tuple(os.get_terminal_size(1)))"], { terminals: { stdout: true } })).toBe(0);
+    expect(s.stdio.take()).toEqual({ stdout: "False True False (120, 40)\n", stderr: "" });
     await s.close();
   });
 
