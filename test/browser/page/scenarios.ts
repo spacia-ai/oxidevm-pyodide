@@ -23,6 +23,8 @@ export interface ScenarioResult {
 
 type Scenario = readonly [name: string, run: (context: Context) => Promise<string>];
 
+const ENABLE = "command: enableModuleCommands turns python and python3 on";
+
 /** In the order they run. The first one pays for the cold start of the browser's caches. */
 const SCENARIOS: readonly Scenario[] = [
   ["numpy and pandas compute in the module", pandas],
@@ -72,22 +74,30 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
     record({ name: "boot", ok: true, detail: `Userspace VM ready in ${String(Math.round(performance.now() - booting))} ms` });
     await vm.workspace.createDirectory("_oxidevm").catch(() => undefined);
     const context: Context = { vm, pyodide, ...(commands === undefined ? {} : { commands }) };
+    const selected = (name: string): boolean => config.only === undefined || name.includes(config.only);
     const attempt = async (name: string, run: (given: Context) => Promise<string>, given: Context): Promise<void> => {
-      if (config.only !== undefined && !name.includes(config.only)) return;
       try {
         record({ name, ok: true, detail: await withDeadline(run(given), name) });
       } catch (error: unknown) {
         record({ name, ok: false, detail: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
       }
     };
-    for (const [name, run] of SCENARIOS) await attempt(name, run, context);
+    for (const [name, run] of SCENARIOS) if (selected(name)) await attempt(name, run, context);
+    // Every command scenario needs the commands on, or the shell finds the image's own python3 and the scenario tests
+    // that instead of the module: enabling runs whenever any of them is selected, and without it none of them runs.
+    const commandScenarios = COMMAND_SCENARIOS.filter(([name]) => selected(name));
     let enabled: EnabledCommands | undefined;
-    await attempt("command: enableModuleCommands turns python and python3 on", async given => {
-      const began = performance.now();
-      enabled = await enableCommands(given);
-      return `enabled in ${String(Math.round(performance.now() - began))} ms (the module's files fetched, checked and kept once)`;
-    }, context);
-    for (const [name, run] of COMMAND_SCENARIOS) await attempt(name, run, enabled === undefined ? context : { ...context, enabledCommands: enabled });
+    if (selected(ENABLE) || commandScenarios.length > 0) {
+      await attempt(ENABLE, async given => {
+        const began = performance.now();
+        enabled = await enableCommands(given);
+        return `enabled in ${String(Math.round(performance.now() - began))} ms (the module's files fetched, checked and kept once)`;
+      }, context);
+    }
+    for (const [name, run] of commandScenarios) {
+      if (enabled === undefined) record({ name, ok: false, detail: "not run: the commands are not on, because enabling them failed" });
+      else await attempt(name, run, { ...context, enabledCommands: enabled });
+    }
   } finally {
     await vm.dispose();
   }
