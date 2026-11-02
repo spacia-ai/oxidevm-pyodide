@@ -35,7 +35,7 @@ describe("catchInterrupts", () => {
     const pyodide = interruptTarget();
     const trap = await catchInterrupts(fake.signals, interrupts);
     expect(fake.calls).toEqual(["trap SIGINT"]);
-    expect(trap.signals).toEqual(["SIGINT"]);
+    expect(trap.interruptBuffer).toBe(fake.buffer);
     fake.buffer[0] = 2;
     interrupts.hold();
     expect(fake.buffer[0]).toBe(0);
