@@ -16,6 +16,7 @@ import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpyt
 import { fakeProcess } from "./support/fake-process.ts";
 import { fakeSignals } from "./support/fake-signals.ts";
 import { echoUpperCase, fakeSockets } from "./support/fake-sockets.ts";
+import { fakeNet } from "./support/fake-net.ts";
 import { fakeStdio } from "./support/fake-stdio.ts";
 import { nodeFiles } from "./support/node-files.ts";
 import { startPyodide } from "./support/pyodide-node.ts";
@@ -98,6 +99,7 @@ function setup(options: SetupOptions = {}): Setup {
     fs: options.fs?.(files.files) ?? files.files,
     files: children.host.files,
     sockets: sockets.sockets,
+    net: fakeNet({}, {}).host.net,
     process: { ...children.host.process, signals: signals.signals, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: options.terminal ?? null }) },
     log: line => { logs.push(line); toStderr(line); },
     fail: (status, message) => { failures.push(`${String(status)}: ${message}`); toStderr(message); return status; },

@@ -1,7 +1,11 @@
 import type { PyodideInterface } from "pyodide";
 import type { nativeRunner } from "./native-bridge.ts";
 import { HIDE_BRIDGE_SOURCE } from "./python/hide-bridge.ts";
+import { HTTP_CLIENTS_PATCH_SOURCE } from "./python/http-clients-patch.ts";
 import { LAZY_PACKAGES_SOURCE } from "./python/lazy-packages.ts";
+import { SOCKET_PATCH_SOURCE } from "./python/socket-patch.ts";
+import { SSL_PATCH_SOURCE } from "./python/ssl-patch.ts";
+import type { NetBridge } from "./net-bridge.ts";
 import { PROCESS_PATCH_SOURCE } from "./python/process-patch.ts";
 import { OXIDEVM_MODULE_SOURCE } from "./python/oxidevm-module.ts";
 import { SLEEP_PATCH_SOURCE } from "./python/sleep-patch.ts";
@@ -47,16 +51,22 @@ export interface GuestBridges {
   readonly interrupts: Interrupts;
   /** Absent: no package loads on import (the finder is not installed). */
   readonly packages?: ShippedPackages;
+  /**
+   * The VM's resolver and TLS client for Python's `socket` and `ssl` (src/net-bridge.ts). Absent: names and TLS stay
+   * Pyodide's own (unit tests that do not need them).
+   */
+  readonly net?: NetBridge;
 }
 
 /**
  * Makes the VM visible to Python: the JS functions behind `oxidevm.run` and the sockets, the `oxidevm` module itself,
  * the real process id, user, group and working directory, a `time.sleep` that Ctrl+C ends, and, with `packages`, the
- * import hook that loads a shipped package when the program imports it. Python code never sees the
+ * import hook that loads a shipped package when the program imports it, and, with `net`, names and TLS for `socket` and
+ * `ssl` through the VM. Python code never sees the
  * bridge module's name as part of a contract; it is private to the `oxidevm` module and the patches.
  */
 export function installGuest(py: PyodideInterface, identity: ProcessIdentity, bridges: GuestBridges): void {
-  const { sockets, interrupts } = bridges;
+  const { sockets, interrupts, net } = bridges;
   // Each wait holds a Ctrl+C that arrives meanwhile, for Python to raise once it runs again (see Interrupts). It resolves
   // with its outcome even when it fails: a KeyboardInterrupt can make Python give up a wait before it awaits it, and a
   // rejection nobody awaits would surface later as an unhandled rejection and as an unretrieved future on stderr.
@@ -70,6 +80,15 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
     recv: (handle: unknown, size: unknown, timeoutMs: unknown) => held(sockets.recv(handle, size, timeoutMs)),
     close: (handle: unknown) => held(sockets.close(handle)),
     sleep: (milliseconds: unknown) => interrupts.sleep(typeof milliseconds === "number" && milliseconds > 0 ? milliseconds : 0),
+    resolve: (name: unknown) => net?.resolve(name),
+    tls_open: (serverName: unknown, alpn: unknown) => net?.tlsOpen(serverName, alpn),
+    tls_receive: (handle: unknown, ciphertext: unknown) => net?.tlsReceive(handle, ciphertext),
+    tls_take: (handle: unknown) => net?.tlsTake(handle),
+    tls_send: (handle: unknown, plaintext: unknown) => net?.tlsSend(handle, plaintext),
+    tls_plaintext: (handle: unknown, max: unknown) => net?.tlsPlaintext(handle, max),
+    tls_status: (handle: unknown) => net?.tlsStatus(handle),
+    tls_close: (handle: unknown) => net?.tlsClose(handle),
+    tls_free: (handle: unknown) => { net?.tlsFree(handle); },
     load_packages: (name: unknown) => held(typeof name === "string" && bridges.packages !== undefined ? bridges.packages.install([name]) : Promise.reject(new TypeError("no package to load"))),
     // Called by Python after every wait: a held Ctrl+C raises KeyboardInterrupt now, as after any system call in CPython.
     check_interrupt: () => { interrupts.restore(); py.checkInterrupt(); },
@@ -79,6 +98,11 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
   py.registerJsModule("_oxidevm_process", { pid: identity.pid, uid: identity.uid, gid: identity.gid, cwd: identity.cwd });
   py.runPython(PROCESS_PATCH_SOURCE);
   runIsolated(py, SLEEP_PATCH_SOURCE);
+  if (net !== undefined) {
+    runIsolated(py, SOCKET_PATCH_SOURCE);
+    runIsolated(py, SSL_PATCH_SOURCE);
+    runIsolated(py, HTTP_CLIENTS_PATCH_SOURCE);
+  }
   if (bridges.packages !== undefined) {
     py.registerJsModule("_oxidevm_packages", { imports: Object.fromEntries(bridges.packages.imports), loaded: [...bridges.packages.loaded] });
     runIsolated(py, LAZY_PACKAGES_SOURCE);

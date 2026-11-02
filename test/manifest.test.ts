@@ -30,10 +30,16 @@ describe("the manifest", () => {
     expect(manifest.version).toBe("0.2.0");
   });
 
-  it("needs the engine that runs module commands and delivers process.signals (Userspace API 145)", () => {
+  it("needs the engine that enforces network reach (Userspace API 146), which also runs module commands and process.signals", () => {
     expect(manifest.requires.host).toContain("process.signals");
-    expect(manifestMinApi(manifest)).toBe(145);
+    expect(manifestMinApi(manifest)).toBe(146);
     expect(COMMANDS_MIN_API).toBe(145);
+  });
+
+  it("reaches the internet through the VM (engine ADR 0029): net.internet with raw sockets, a purpose and no disclosed hosts", () => {
+    expect(manifest.requires.host).toContain("net.internet");
+    expect(manifest.requires.host).not.toContain("net.vm");
+    expect(manifest.network).toEqual({ purpose: "Python programs reach the internet through the VM" });
   });
 
   it("declares a command module for the Emscripten ABI with the host operations the adapter uses", () => {
@@ -41,7 +47,7 @@ describe("the manifest", () => {
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/u);
     expect(manifest.abi).toBe("emscripten");
     expect(manifest.process).toEqual({ kind: "command" });
-    expect([...manifest.requires.host].sort()).toEqual(["files.async", "files.sync", "process.info", "process.signals", "process.spawn", "sockets.connect"]);
+    expect([...manifest.requires.host].sort()).toEqual(["files.async", "files.sync", "net.internet", "process.info", "process.signals", "process.spawn", "sockets.connect"]);
     expect([...manifest.requires.browser].sort()).toEqual(["cross-origin-isolated", "jspi"]);
   });
 
@@ -88,11 +94,15 @@ describe("the manifest", () => {
     expect(license.notices).toEqual([...NOTICE_FILES]);
   });
 
-  it("records the origin of every upstream component, and it is the one the lock and the notices name", () => {
+  it("records the origin of Pyodide and of every package with compiled code or a copyleft licence, as the lock and the notices name them", () => {
+    // The SDK takes at most 16 upstream entries and the release carries 21 wheels, so the manifest names the runtime,
+    // the packages with WebAssembly code and the MPL-2.0 ones; NOTICES.txt names the source of every package.
     const [runtime, ...packages] = manifest.upstream;
     expect(runtime).toEqual({ name: "Pyodide", version: lock.pyodide.version, source: `https://github.com/pyodide/pyodide/tree/${lock.pyodide.source.commit}` });
     const wheels = lock.files.flatMap(file => (file.role === "wheel" ? [file] : []));
-    expect(packages.map(item => [item.name, item.version]).sort()).toEqual(wheels.map(file => [file.package, file.version]).sort());
+    const named = wheels.filter(file => !file.name.endsWith("-none-any.whl") || RECORDED[file.package]?.spdx.includes("MPL") === true);
+    expect(packages.map(item => [item.name, item.version]).sort()).toEqual(named.map(file => [file.package, file.version]).sort());
+    expect(manifest.upstream.length).toBeLessThanOrEqual(16);
     for (const item of packages) expect(item.source, item.name).toBe(RECORDED[item.name]?.source);
   });
 });

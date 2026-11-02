@@ -32,7 +32,7 @@ const packages: ShippedPackages = {
 };
 
 beforeAll(async () => {
-  guest = await startGuest(undefined, packages);
+  guest = await startGuest(undefined, { packages });
   const found: unknown = guest.py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
   if (typeof found !== "string") throw new Error("no site-packages");
   sitePackages = found;

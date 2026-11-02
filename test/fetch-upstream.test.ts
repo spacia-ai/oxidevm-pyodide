@@ -177,7 +177,7 @@ describe("decodeUpstreamLock", () => {
     const lock = decodeUpstreamLock(await committed());
     expect(lock.pyodide.version).toBe("314.0.7");
     expect(lock.files.filter(file => file.role === "runtime").map(file => file.name)).toEqual(["pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]);
-    expect(lock.files.filter(file => file.role === "wheel")).toHaveLength(13);
+    expect(lock.files.filter(file => file.role === "wheel")).toHaveLength(21);
   });
 
   it("refuses unknown fields, bad hashes, repeated names and insecure URLs", async () => {

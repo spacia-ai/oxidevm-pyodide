@@ -26,6 +26,12 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   `src/guest.ts`), and Python calls `_oxidevm_bridge.check_interrupt()` right after it, which puts the Ctrl+C back and
   raises KeyboardInterrupt. A new wait of the bridge must do the same. Ctrl+C during the program's own asyncio waits is
   not handled yet (README.md, Known limits).
+- Network (engine ADR 0029): the manifest declares `net.internet` with `sockets.connect` and a purpose, no hosts. Python's
+  network goes only through the VM: `kit.emscripten.network` for Pyodide's sockets, `src/net-bridge.ts` for names and TLS
+  sessions, and the Python patches in `src/python/` (`socket-patch.ts`, `ssl-patch.ts`, `http-clients-patch.ts`). Never
+  use the browser's `fetch`, XHR or WebSocket for Python, and never add a way to turn TLS verification off. A network
+  failure fails as CPython 3.14 does (`test/fixtures/cpython-net.json`, recorded by `python3.14 -I
+  scripts/record-cpython-net.py`); a Python program decides its own exit, so the module never exits 69 for it.
 - A program started as a command cannot import the JavaScript bridge (`src/python/hide-bridge.ts`); application starts can.
   It is defence in depth, not a boundary, and README.md must keep saying so.
 - Import types from `@oxidevm/sdk/wasm` with `import type`; the only value import is `defineModule`. The adapter ships as one

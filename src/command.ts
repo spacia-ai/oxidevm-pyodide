@@ -5,6 +5,7 @@ import { guestProcess } from "./identity.ts";
 import { hideJavaScript, installGuest } from "./guest.ts";
 import type { CommandHost } from "./host-types.ts";
 import { nativeRunner } from "./native-bridge.ts";
+import { netBridge } from "./net-bridge.ts";
 import { bundledEngine, loadPython } from "./python-loader.ts";
 import type { Engine } from "./python-loader.ts";
 import { HOST_ARGV0, placementRefusal, prepareProgram, pythonEnvironment, runProgram } from "./script.ts";
@@ -54,6 +55,7 @@ function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandL
  */
 export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks<PythonCommand> {
   const sockets = socketBridge(host);
+  const net = netBridge(host, error => host.kit.net.errno(error));
   const report = (error: unknown): void => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); };
   return {
     async main(io) {
@@ -73,10 +75,12 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
         env: pythonEnvironment(io.env), log: text => { host.log(text); },
       }, engine);
       const { py } = python;
+      // Python's sockets and Emscripten's own name lookups go to the VM's network (engine ADR 0029, N-4).
+      host.kit.emscripten.network(host, Reflect.get(py, "_module"));
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
       const interrupts = createInterrupts();
-      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts, packages: python });
+      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts, packages: python, net });
       // Defence in depth, not a boundary: a program in the VM must not reach the page's JavaScript through Python.
       if (io.invocation.kind === "command") hideJavaScript(py);
       const trap = await catchInterrupts(host.process.signals, interrupts);
@@ -84,6 +88,7 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       return outcome.kind === "exit" ? outcome.status : endBySignal(host.process.signals, trap);
     },
     async close() {
+      net.freeAll();
       await sockets.closeAll();
     },
   };

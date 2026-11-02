@@ -162,9 +162,40 @@ with oxidevm.connect_tcp(5432) as connection:             # host defaults to "12
 timeout runs out, `BrokenPipeError` when the other side has gone), and Ctrl+C during a call raises KeyboardInterrupt. A program
 may hold 32 sockets open; the module closes any it leaves open when it ends.
 
+## Network
+
+- **Reach: internet** (`net.internet` with `sockets.connect`, engine ADR 0029). Purpose, as the install review shows it:
+  "Python programs reach the internet through the VM". The module discloses no hosts: a Python program reaches whatever
+  host it asks for, so no list could be complete.
+- **How.** Python's `socket` is Pyodide's Emscripten socket layer connected to the module process's own VM sockets
+  (`kit.emscripten.network`), and names resolve through the VM's resolver (`/etc/hosts`, then the nameservers of
+  `/etc/resolv.conf`). `ssl` runs the engine's TLS client over those sockets and verifies every certificate against the
+  VM's `/etc/ssl/cert.pem`, what `curl` in the image trusts. `socket`, `ssl`, `http.client`, `urllib.request` and the
+  shipped `requests` (with `urllib3`) and `httpx` are tested this way; other standard modules (`smtplib`, `imaplib`) use the
+  same `socket` and `ssl`. urllib3 and httpx are kept on these sockets instead of the browser's `fetch`, which does not
+  exist in a module. The browser's own network is never used.
+- **Where.** Programs in the VM: loopback, the VM's own addresses, and its names. The internet: once the application
+  connects the VM through a relay (`vm.network.connect`) and the user allows the session, public hosts on TCP 80 and 443.
+  Nothing on the internet can connect in.
+- **Offline.** Before the VM is connected, or after the user revoked it, Python fails as CPython does when the system refuses
+  a connection: `PermissionError` (EPERM) from `connect` and from name lookups, which urllib reports as
+  `URLError(PermissionError(...))` and requests as `ConnectionError`; a revoke resets open connections. The program decides what to do and which status to exit with; the module adds nothing.
+- **Failures as in CPython 3.14** (recorded from it, `scripts/record-cpython-net.py`): a name that does not exist is
+  `socket.gaierror(-2, 'Name or service not known')`, a nameserver that does not answer `socket.gaierror(-3, 'Temporary
+  failure in name resolution')`, a refused port `ConnectionRefusedError`, and a certificate the VM does not trust
+  `ssl.SSLCertVerificationError` with OpenSSL's `verify_code` and `verify_message` (20 unknown issuer, 62 wrong name,
+  10 expired, 9 not yet valid). Error numbers are Pyodide's (`errno.ECONNREFUSED`), as everywhere in Pyodide.
+- **Different on purpose, or because the engine does not say:** TLS always verifies: `verify_mode = CERT_NONE`,
+  `check_hostname = False` and `load_verify_locations` are accepted but change nothing (a CA file adds no trust; the error
+  carries a note saying so). `getpeercert()` returns `{}` (None with `binary_form=True`); `version()` and `cipher()` are
+  None. Server-side TLS and client certificates are refused with `ssl.SSLError`. Only IPv4 addresses are used. A socket
+  timeout limits the connection attempt, not a read that waits for the server: a silent server keeps `recv` waiting until
+  Ctrl+C. Pyodide's event loop has no sockets, so asyncio streams cannot connect (`ssl.SSLObject` over memory BIOs works).
+- `oxidevm.connect_tcp` and `oxidevm.connect_unix` stay as they were in 0.2.0, with their own timeouts.
+
 ## How it is built and checked
 
-The Pyodide runtime (`pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json`) and the 13 wheels are mirrored byte for byte
+The Pyodide runtime (`pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json`) and the 21 wheels are mirrored byte for byte
 from [Pyodide 314.0.7](https://github.com/pyodide/pyodide/tree/314.0.7) and pinned by sha256 in `upstream/lock.json`. They are
 not committed; `pnpm run fetch-upstream` downloads and verifies them. The release pins them again in its `module.json`.
 
@@ -172,9 +203,9 @@ Pyodide's JavaScript is bundled into `adapter.mjs` (about 1.5 MB), with its fact
 or evaluated beyond the pinned bytes. Pyodide is told to find its files at a virtual address (`https://pyodide.invalid/`) and
 a scoped `fetch` answers for that address, only, from bytes the runner has verified against the release pins; every other URL
 under the virtual address is rejected and every other request goes to the real `fetch`. All files that Python will need are
-verified before Pyodide starts, so a file that was altered after staging stops the module with exit status 121 before any
-Python runs. Pyodide fetches that happen later (`pyodide.http`, `micropip`) go through the real `fetch`, which is why network
-installs inside Python are out of scope.
+checked by the runner when the module starts (once for the VM), so a file that was altered after staging stops the module
+with exit status 121 before any Python runs. Wheels are read from those checked copies when a program imports their
+packages. `micropip` and installs from the network are out of scope.
 
 ## Known limits
 
@@ -202,7 +233,7 @@ installs inside Python are out of scope.
 - The module cancels cleanly when its process group is killed (`process.kill("SIGKILL", { scope: "process-group" })`); a
   native child started with `oxidevm.run` survives a kill of the module's process alone.
 - A socket behaves like any socket: `sendall` waits when the other side is not reading and the buffers are full, so a client
-  that sends a lot to a service that echoes it should read as it writes, or use `settimeout`.
+  that sends a lot to a service that echoes it should read as it writes. For the network's own limits see [Network](#network).
 - Licences: see [NOTICES.txt](NOTICES.txt), [SOURCE-OFFER.md](SOURCE-OFFER.md) and the [licences](#licences) below. The
   maintainer has signed them off; they have not had an independent legal review.
 

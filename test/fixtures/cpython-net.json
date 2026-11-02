@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "interpreter": "/usr/bin/python3.14",
+    "version": "3.14.4",
+    "openssl": "OpenSSL 3.5.5 27 Jan 2026",
+    "recorded": "2026-11-02",
+    "recorder": "scripts/record-cpython-net.py",
+    "command": "python3.14 -I scripts/record-cpython-net.py",
+    "unresolvable": "nonexistent.invalid"
+  },
+  "cases": {
+    "getaddrinfo-unresolvable": {
+      "error": {
+        "type": "socket.gaierror",
+        "args": [
+          "-2",
+          "'Name or service not known'"
+        ],
+        "str": "[Errno -2] Name or service not known",
+        "errno": -2
+      }
+    },
+    "gethostbyname-unresolvable": {
+      "error": {
+        "type": "socket.gaierror",
+        "args": [
+          "-2",
+          "'Name or service not known'"
+        ],
+        "str": "[Errno -2] Name or service not known",
+        "errno": -2
+      }
+    },
+    "create-connection-unresolvable": {
+      "error": {
+        "type": "socket.gaierror",
+        "args": [
+          "-2",
+          "'Name or service not known'"
+        ],
+        "str": "[Errno -2] Name or service not known",
+        "errno": -2
+      }
+    },
+    "urlopen-unresolvable": {
+      "error": {
+        "type": "urllib.error.URLError",
+        "args": [
+          "gaierror(-2, 'Name or service not known')"
+        ],
+        "str": "<urlopen error [Errno -2] Name or service not known>",
+        "errno": null,
+        "urlReason": {
+          "type": "socket.gaierror",
+          "args": [
+            "-2",
+            "'Name or service not known'"
+          ],
+          "str": "[Errno -2] Name or service not known",
+          "errno": -2
+        }
+      }
+    },
+    "create-connection-refused": {
+      "error": {
+        "type": "builtins.ConnectionRefusedError",
+        "args": [
+          "111",
+          "'Connection refused'"
+        ],
+        "str": "[Errno 111] Connection refused",
+        "errno": 111
+      }
+    },
+    "urlopen-refused": {
+      "error": {
+        "type": "urllib.error.URLError",
+        "args": [
+          "ConnectionRefusedError(111, 'Connection refused')"
+        ],
+        "str": "<urlopen error [Errno 111] Connection refused>",
+        "errno": null,
+        "urlReason": {
+          "type": "builtins.ConnectionRefusedError",
+          "args": [
+            "111",
+            "'Connection refused'"
+          ],
+          "str": "[Errno 111] Connection refused",
+          "errno": 111
+        }
+      }
+    },
+    "tls-self-default": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 18,
+        "verify_message": "self-signed certificate"
+      }
+    },
+    "tls-self-trusting": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 18,
+        "verify_message": "self-signed certificate"
+      }
+    },
+    "urlopen-tls-self-trusting": {
+      "error": {
+        "type": "urllib.error.URLError",
+        "args": [
+          "SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)')"
+        ],
+        "str": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)>",
+        "errno": null,
+        "urlReason": {
+          "type": "ssl.SSLCertVerificationError",
+          "args": [
+            "1",
+            "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)'"
+          ],
+          "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)",
+          "errno": 1,
+          "reason": "CERTIFICATE_VERIFY_FAILED",
+          "library": "SSL",
+          "verify_code": 18,
+          "verify_message": "self-signed certificate"
+        }
+      }
+    },
+    "tls-good-default": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 20,
+        "verify_message": "unable to get local issuer certificate"
+      }
+    },
+    "tls-good-trusting": {
+      "result": "True"
+    },
+    "urlopen-tls-good-trusting": {
+      "result": "200"
+    },
+    "tls-other-default": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 20,
+        "verify_message": "unable to get local issuer certificate"
+      }
+    },
+    "tls-other-trusting": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "\"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)\""
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 62,
+        "verify_message": "Hostname mismatch, certificate is not valid for 'localhost'."
+      }
+    },
+    "urlopen-tls-other-trusting": {
+      "error": {
+        "type": "urllib.error.URLError",
+        "args": [
+          "SSLCertVerificationError(1, \"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)\")"
+        ],
+        "str": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)>",
+        "errno": null,
+        "urlReason": {
+          "type": "ssl.SSLCertVerificationError",
+          "args": [
+            "1",
+            "\"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)\""
+          ],
+          "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'localhost'. (_ssl.c:1081)",
+          "errno": 1,
+          "reason": "CERTIFICATE_VERIFY_FAILED",
+          "library": "SSL",
+          "verify_code": 62,
+          "verify_message": "Hostname mismatch, certificate is not valid for 'localhost'."
+        }
+      }
+    },
+    "tls-expired-default": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 20,
+        "verify_message": "unable to get local issuer certificate"
+      }
+    },
+    "tls-expired-trusting": {
+      "error": {
+        "type": "ssl.SSLCertVerificationError",
+        "args": [
+          "1",
+          "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)'"
+        ],
+        "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)",
+        "errno": 1,
+        "reason": "CERTIFICATE_VERIFY_FAILED",
+        "library": "SSL",
+        "verify_code": 10,
+        "verify_message": "certificate has expired"
+      }
+    },
+    "urlopen-tls-expired-trusting": {
+      "error": {
+        "type": "urllib.error.URLError",
+        "args": [
+          "SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)')"
+        ],
+        "str": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)>",
+        "errno": null,
+        "urlReason": {
+          "type": "ssl.SSLCertVerificationError",
+          "args": [
+            "1",
+            "'[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)'"
+          ],
+          "str": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1081)",
+          "errno": 1,
+          "reason": "CERTIFICATE_VERIFY_FAILED",
+          "library": "SSL",
+          "verify_code": 10,
+          "verify_message": "certificate has expired"
+        }
+      }
+    }
+  }
+}
