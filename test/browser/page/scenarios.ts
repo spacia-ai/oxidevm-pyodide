@@ -5,6 +5,7 @@ import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
 import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
+import { NETWORK_SCENARIOS } from "./scenarios-network.ts";
 import { sockets } from "./scenarios-sockets.ts";
 import type { Context } from "./support.ts";
 
@@ -28,11 +29,11 @@ const ENABLE = "command: enableModuleCommands turns python and python3 on";
 /** In the order they run. The first one pays for the cold start of the browser's caches. */
 const SCENARIOS: readonly Scenario[] = [
   ["numpy and pandas compute in the module", pandas],
-  ["the packages option selects what is loaded, and the SDK refuses an unknown package", packagesOption],
+  ["packages load when imported, the packages option preloads, and the SDK refuses an unknown package", packagesOption],
   ["stdin, stdout and stderr are the process's descriptors 0, 1 and 2, and the exit status comes back", standardStreams],
   ["os.getpid, getuid and getgid report the module's real Linux process", identity],
   ["exit statuses: success, traceback, SystemExit n (limited to 119), usage and unreadable program", exitStatuses],
-  ["a file altered after staging is refused before any module code runs (exit 121)", tamperedArtifact],
+  ["a file altered after staging is refused before any module code runs", tamperedArtifact],
   ["files are shared both ways with native Linux, permissions included, while the module runs", filesBothWays],
   ["files of 20 MiB cross the module's transfer limit in both directions", largeFiles],
   ["chmod, truncate, symlink, shutil.copy and utime reach the VM's files", metadata],
@@ -73,7 +74,7 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
   try {
     record({ name: "boot", ok: true, detail: `Userspace VM ready in ${String(Math.round(performance.now() - booting))} ms` });
     await vm.workspace.createDirectory("_oxidevm").catch(() => undefined);
-    const context: Context = { vm, pyodide, ...(commands === undefined ? {} : { commands }) };
+    const context: Context = { vm, pyodide, openVM: () => openVM(config), ...(commands === undefined ? {} : { commands }) };
     const selected = (name: string): boolean => config.only === undefined || name.includes(config.only);
     const attempt = async (name: string, run: (given: Context) => Promise<string>, given: Context): Promise<void> => {
       try {
@@ -85,7 +86,7 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
     for (const [name, run] of SCENARIOS) if (selected(name)) await attempt(name, run, context);
     // Every command scenario needs the commands on, or the shell finds the image's own python3 and the scenario tests
     // that instead of the module: enabling runs whenever any of them is selected, and without it none of them runs.
-    const commandScenarios = COMMAND_SCENARIOS.filter(([name]) => selected(name));
+    const commandScenarios = [...COMMAND_SCENARIOS.slice(0, -1), ...NETWORK_SCENARIOS, ...COMMAND_SCENARIOS.slice(-1)].filter(([name]) => selected(name));
     let enabled: EnabledCommands | undefined;
     if (selected(ENABLE) || commandScenarios.length > 0) {
       await attempt(ENABLE, async given => {

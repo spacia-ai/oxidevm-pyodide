@@ -75,12 +75,33 @@ interface Served {
  * `/__requests?since=<n>` answers with the server's log from entry n on (`{ next, paths }`), so that a scenario can check
  * what was fetched while it ran.
  */
-async function serve(locations: { readonly inputs: Inputs; readonly page: string; readonly imagePrefix: string }): Promise<Served> {
+const MODULE_FRAME_PATH = "/engine/module-frame/";
+const MODULE_FRAME_DIR = join(root, "node_modules/@oxidevm/sdk/assets/module-frame");
+
+/** The module frame's response headers, from the SDK's `frame.json`. */
+async function moduleFrameHeaders(): Promise<Readonly<Record<string, string>>> {
+  const frame: unknown = JSON.parse(await readFile(join(MODULE_FRAME_DIR, "frame.json"), "utf8"));
+  const headers: unknown = typeof frame === "object" && frame !== null ? Reflect.get(frame, "headers") : undefined;
+  if (typeof headers !== "object" || headers === null) throw new Error("The SDK's module-frame/frame.json has no headers");
+  return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, String(value)]));
+}
+
+async function serve(locations: { readonly inputs: Inputs; readonly page: string; readonly imagePrefix: string; readonly frameHeaders: Readonly<Record<string, string>> }): Promise<Served> {
   let tamper = false;
   const requests: string[] = [];
   const { inputs, page, imagePrefix } = locations;
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost"), path = url.pathname;
+    // Engine ADR 0028: module code runs in the SDK's module frame beside the engine, served with the frame's own headers.
+    if (path.startsWith(MODULE_FRAME_PATH)) {
+      requests.push(path);
+      const name = path.slice(MODULE_FRAME_PATH.length) || "index.html";
+      if (!["index.html", "broker.js", "runner.js"].includes(name)) { response.writeHead(404); response.end(); return; }
+      for (const [header, value] of Object.entries(locations.frameHeaders)) response.setHeader(header, value);
+      response.setHeader("Content-Type", name.endsWith(".html") ? "text/html" : "text/javascript");
+      createReadStream(join(MODULE_FRAME_DIR, name)).pipe(response);
+      return;
+    }
     for (const [name, value] of [["Cross-Origin-Opener-Policy", "same-origin"], ["Cross-Origin-Embedder-Policy", "require-corp"], ["Cross-Origin-Resource-Policy", "same-origin"], ["Cache-Control", "no-store"]] as const) response.setHeader(name, value);
     if (path === "/__tamper/on" || path === "/__tamper/off") {
       tamper = path.endsWith("on");
@@ -187,7 +208,7 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
     const page = join(scratch, "page");
     await build({ root: project, configFile: false, logLevel: "warn", base: "/page/", build: { outDir: page, emptyOutDir: true, target: "esnext", assetsInlineLimit: 0, chunkSizeWarningLimit: 4096 }, worker: { format: "es" } });
     const imagePrefix = `${dirname(new URL(reference.manifestUrl, "http://x").pathname)}/`;
-    served = await serve({ inputs, page, imagePrefix });
+    served = await serve({ inputs, page, imagePrefix, frameHeaders: await moduleFrameHeaders() });
     const image = { manifestUrl: new URL(reference.manifestUrl, served.origin).href, manifestSHA256: reference.manifestSHA256, trust: reference.trust };
     const browser = await chromium.launch({ headless: true, args: ["--js-flags=--experimental-wasm-return-call"] });
     try {

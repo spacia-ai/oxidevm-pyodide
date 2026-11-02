@@ -1,6 +1,6 @@
 import type { ProcessExit } from "@oxidevm/sdk";
 import { spawnModule } from "@oxidevm/sdk/wasm";
-import { check, describeExit, expectStatus, failureOf, field, native, run, same, sleep, start } from "./support.ts";
+import { check, describeExit, expectStatus, failureOf, native, run, same, sleep, start } from "./support.ts";
 import type { Context } from "./support.ts";
 
 // Scenarios about the module as a process: what it computes, how it ends, and how it reaches native Linux programs.
@@ -12,7 +12,8 @@ function parsed(text: string): unknown {
 
 /** Starts the module with exactly these arguments (no program written first), standard input closed at once, and returns how it ended and what it said. */
 async function bare(context: Context, args: readonly string[]): Promise<{ readonly exit: ProcessExit; readonly stderr: string }> {
-  const process = await spawnModule(context.vm, context.pyodide, { args, options: { packages: [] } });
+  // A start without cwd runs in "/", which this Python does not see, so the module would stop with status 2.
+  const process = await spawnModule(context.vm, context.pyodide, { args, cwd: "/workspace", options: { packages: [] } });
   await process.stdin.getWriter().close();
   const [exit, stderr] = await Promise.all([process.exit, new Response(process.stderr).text()]);
   return { exit, stderr };
@@ -35,19 +36,24 @@ print("mean", float(frame["total"].mean()))
 }
 
 export async function packagesOption(context: Context): Promise<string> {
-  const result = await run(context, `import numpy
+  // Nothing preloaded: numpy, pandas and pillow (as PIL) load when the program imports them, from the verified copies.
+  const lazy = await run(context, `import numpy
 print("numpy", numpy.__version__)
-try:
-    import pandas
-    print("pandas imported")
-except ModuleNotFoundError as error:
-    print("no", error.name)
-`, { name: "packages", packages: ["numpy"] });
-  expectStatus(result, 0, "numpy-only run");
-  same(result.stdout, "numpy 2.4.6\nno pandas\n", "what Python printed with only numpy");
-  const refused = await failureOf(spawnModule(context.vm, context.pyodide, { args: ["/workspace/_oxidevm/packages.py"], options: { packages: ["scipy"] } }));
+import pandas
+print("pandas", pandas.__version__)
+from PIL import Image
+print("PIL", Image.__name__)
+`, { name: "packages-lazy", packages: [] });
+  expectStatus(lazy, 0, "a run that imports packages it did not preload");
+  same(lazy.stdout, "numpy 2.4.6\npandas 3.0.2\nPIL PIL.Image\n", "what Python printed after loading on import");
+  // An installed package has its metadata; one that loads on import has none until it is imported.
+  const probe = "from importlib import metadata\nfor name in ('pandas', 'numpy', 'pillow'):\n    try:\n        print(name, metadata.version(name))\n    except metadata.PackageNotFoundError:\n        print(name, 'not loaded')\n";
+  const preloaded = await run(context, probe, { name: "packages-preload", packages: ["pandas"] });
+  expectStatus(preloaded, 0, "a run with pandas preloaded");
+  same(preloaded.stdout, "pandas 3.0.2\nnumpy 2.4.6\npillow not loaded\n", "preloading pandas unpacks it and what it needs, and nothing else");
+  const refused = await failureOf(spawnModule(context.vm, context.pyodide, { args: ["/workspace/_oxidevm/packages-lazy.py"], options: { packages: ["scipy"] } }));
   same([refused.code, refused.reason], ["INVALID_ARGUMENT", "wasm-module-options"], "an unknown package");
-  return `only numpy loaded in ${String(result.ms)} ms; an unknown package is refused by the SDK (${refused.message})`;
+  return `numpy, pandas and PIL loaded on import in ${String(lazy.ms)} ms; pandas preloaded in ${String(preloaded.ms)} ms; an unknown package is refused by the SDK (${refused.message})`;
 }
 
 export async function standardStreams(context: Context): Promise<string> {
@@ -95,7 +101,7 @@ export async function exitStatuses(context: Context): Promise<string> {
   }
   // 0.2.0 reads the command line as CPython does, also when the application starts the module: no program means standard input.
   const empty = await bare(context, []);
-  same(describeExit(empty.exit), "exit 0", "no program named, and nothing on standard input");
+  same(describeExit(empty.exit), "exit 0", `no program named, and nothing on standard input (stderr: ${empty.stderr.slice(-400)})`);
   const usage = await bare(context, ["-Z"]);
   same(describeExit(usage.exit), "exit 2", "an unknown option");
   check(usage.stderr.includes("Unknown option: -Z\nusage: pyodide [option] ... [-c cmd | -m mod | file | -] [arg] ..."), `the usage text was ${JSON.stringify(usage.stderr)}`);
@@ -106,16 +112,21 @@ export async function exitStatuses(context: Context): Promise<string> {
 }
 
 export async function tamperedArtifact(context: Context): Promise<string> {
+  // The VM checks the module's files once, at its first start, and keeps the checked copies (SDK 0.0.10, engine ADR
+  // 0028), so the altered file is served to a fresh VM.
+  if (context.openVM === undefined) throw new Error("the page did not wire openVM into the context");
+  const fresh = await context.openVM();
   await fetch("/__tamper/on");
   try {
-    const result = await run(context, "print('this must never run')\n", { name: "tampered", packages: [] });
-    check(result.exit.kind === "exited" && result.exit.code === 121, `expected exit 121 but got ${describeExit(result.exit)}; stderr: ${result.stderr}`);
-    check(result.stdout === "", `module code ran: ${result.stdout}`);
-    const report: unknown = parsed(result.stderr.trim().split("\n").at(-1) ?? "");
-    same([field(report, "oxidevm"), field(report, "kind")], ["error", "integrity"], "the runner's report");
-    return `exit 121, ${String(field(report, "message"))}`;
+    await fresh.workspace.createDirectory("_oxidevm").catch(() => undefined);
+    // The VM checks the files before the module process exists: the start is refused and no module code runs.
+    await fresh.workspace.writeText("_oxidevm/tampered.py", "print('this must never run')\n");
+    const refused = await failureOf(spawnModule(fresh, context.pyodide, { args: ["/workspace/_oxidevm/tampered.py"], cwd: "/workspace", options: { packages: [] } }));
+    check(refused.message.includes("python_stdlib.zip does not match its sha256 pin"), `the start of a module with an altered file: ${JSON.stringify(refused)}`);
+    return `a fresh VM refused to start the module: ${refused.code} ${refused.message}`;
   } finally {
     await fetch("/__tamper/off");
+    await fresh.dispose();
   }
 }
 

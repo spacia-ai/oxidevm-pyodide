@@ -11,6 +11,8 @@ export interface Context {
   readonly commands?: CommandSwitch;
   /** The commands, while they are on. */
   readonly enabledCommands?: EnabledCommands;
+  /** Boots another VM like `vm`, for a scenario that needs one whose module files were never checked. */
+  readonly openVM?: () => Promise<UserspaceVM>;
 }
 
 export const decoder = new TextDecoder();
