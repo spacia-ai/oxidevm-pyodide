@@ -1,21 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { contentTypeFor, scopedFetch, VIRTUAL_INDEX, withScopedFetch } from "../src/artifact-fetch.ts";
+import { contentTypeFor, PRECOMPILED_HEADER, scopedFetch, VIRTUAL_INDEX, withScopedFetch } from "../src/artifact-fetch.ts";
 import type { Fetch, ServedFiles } from "../src/artifact-fetch.ts";
 
 const WASM = Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0);
 const WHEEL = Uint8Array.of(80, 75, 3, 4, 9, 9);
 const LOCK = new TextEncoder().encode('{"packages":{}}');
 
+/** Every name `read` was asked for, in order: a file is read only when it is fetched. */
+const reads: string[] = [];
+
 function served(): ServedFiles {
-  return {
-    index: VIRTUAL_INDEX,
-    files: new Map<string, Uint8Array<ArrayBuffer>>([
+  const files = new Map<string, Uint8Array<ArrayBuffer>>([
       ["pyodide.asm.wasm", Uint8Array.from(WASM)],
       ["pandas-3.0.2-cp314-cp314-pyemscripten_2026_0_wasm32.whl", Uint8Array.from(WHEEL)],
       ["python_stdlib.zip", Uint8Array.from(WHEEL)],
       ["pyodide-lock.json", Uint8Array.from(LOCK)],
       ["NOTICES.txt", Uint8Array.of(65)],
-    ]),
+  ]);
+  return {
+    index: VIRTUAL_INDEX,
+    read: name => {
+      reads.push(name);
+      const bytes = files.get(name);
+      return bytes === undefined ? undefined : Promise.resolve(bytes);
+    },
   };
 }
 
@@ -52,9 +60,27 @@ describe("contentTypeFor", () => {
 });
 
 describe("scopedFetch under the virtual index", () => {
+  it("reads a file only when it is fetched, once per fetch", async () => {
+    reads.length = 0;
+    const run = scopedFetch(served(), recordingFetch().fetch);
+    expect(reads).toEqual([]);
+    await run(`${VIRTUAL_INDEX}python_stdlib.zip`);
+    expect(reads).toEqual(["python_stdlib.zip"]);
+  });
+
+  it("answers for a file the VM already compiled with an empty response that names it, without reading it", async () => {
+    reads.length = 0;
+    const run = scopedFetch({ ...served(), precompiled: new Set(["pyodide.asm.wasm"]) }, recordingFetch().fetch);
+    const response = await run(`${VIRTUAL_INDEX}pyodide.asm.wasm`);
+    expect([response.status, response.headers.get(PRECOMPILED_HEADER), response.headers.get("content-type"), (await response.arrayBuffer()).byteLength]).toEqual([200, "pyodide.asm.wasm", "application/wasm", 0]);
+    expect(reads).toEqual([]);
+    // Only the named file is answered that way.
+    expect((await run(`${VIRTUAL_INDEX}python_stdlib.zip`)).headers.get(PRECOMPILED_HEADER)).toBeNull();
+  });
+
   it("serves only under the directory of the index when the index has a path of its own", async () => {
     const { fetch, passed } = recordingFetch();
-    const run = scopedFetch({ index: "https://pyodide.invalid/v1/", files: served().files }, fetch);
+    const run = scopedFetch({ index: "https://pyodide.invalid/v1/", read: served().read }, fetch);
     expect((await run("https://pyodide.invalid/v1/pyodide.asm.wasm")).status).toBe(200);
     // "/zz/" is as long as "/v1/", so only the check of the directory keeps this from being the file.
     for (const outside of ["https://pyodide.invalid/zz/pyodide.asm.wasm", "https://pyodide.invalid/pyodide.asm.wasm", "https://pyodide.invalid/v2/pyodide.asm.wasm"]) {

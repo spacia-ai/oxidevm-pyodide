@@ -27,7 +27,7 @@ with status 122 and names what is missing.
 import { enableModuleCommands } from "@oxidevm/sdk/wasm";
 import { pyodide } from "./oxidevm.modules.generated";
 
-const python = await enableModuleCommands(vm, pyodide, { commands: ["python3"], options: { packages: ["numpy"] } });
+const python = await enableModuleCommands(vm, pyodide, { commands: ["python3"] });
 // Any program in the VM now runs /usr/local/bin/python3: a shell, a script that starts with #!/usr/bin/env python3,
 // make, another module. A program it does not find there is the image's own, if the image has one.
 const result = await vm.exec({ command: "/bin/sh", args: ["-c", "python3 -c 'import numpy; print(numpy.__version__)'"] });
@@ -38,7 +38,7 @@ Leave out `commands` to turn on both names. `python3` and `python` come before t
 so they replace an image's `/usr/bin/python3` for programs that look it up by name. The application chooses the options
 when it turns the commands on; a program in the VM chooses only the command line, environment, directory and standard
 streams. **Read [Known limits](#known-limits) before turning them on:** a program that runs `python3` runs code in a worker
-of your page's origin, and every run starts Pyodide again, so keep `packages` short.
+of your page's origin, and every run starts Pyodide again and unpacks the packages it imports.
 
 ### Started by the application
 
@@ -58,10 +58,14 @@ Options (typed from the manifest):
 
 | option | values | default |
 | --- | --- | --- |
-| `packages` | any of `contourpy`, `cycler`, `fonttools`, `kiwisolver`, `matplotlib`, `numpy`, `packaging`, `pandas`, `pillow`, `pyparsing`, `python-dateutil`, `pytz`, `six` | `["pandas", "matplotlib"]` |
+| `packages` | any of `contourpy`, `cycler`, `fonttools`, `kiwisolver`, `matplotlib`, `numpy`, `packaging`, `pandas`, `pillow`, `pyparsing`, `python-dateutil`, `pytz`, `six` | `[]` |
 
-The packages (and the ones they need) are unpacked before the program starts. `packages: []` starts the bare interpreter, in
-about a second.
+Every shipped package loads the first time a program imports it (`import numpy`, `import PIL` for pillow, `import pylab`
+for Matplotlib), with the packages it needs, from the release's verified files; nothing is downloaded. `packages` names
+the ones to unpack before the program starts instead: a program that always needs pandas starts it sooner that way, and an
+import where Python cannot wait for the load (inside a callback that JavaScript calls) needs it. Without packages a run
+starts the bare interpreter in about a second. Pyodide's interpreter is compiled once for the VM, when the commands are
+turned on or the module is first started, not again for every run.
 
 ## What the program sees
 
@@ -179,9 +183,10 @@ installs inside Python are out of scope.
   data and BroadcastChannels. Hiding the JavaScript bridge from commands is defence in depth, not a boundary: Pyodide's
   private modules, and objects that the `oxidevm` module holds, still lead to JavaScript. Turn the commands on only in a VM
   whose programs you would let run in your page.
-- Every run starts Pyodide again and unpacks the packages the application chose; how long that takes depends on the host:
-  about a second for the interpreter alone, several more with pandas and Matplotlib. Turn the commands on with the smallest
-  `packages` list that the programs need.
+- Every run starts Pyodide again and unpacks the packages it imports (or that `packages` preloads); how long that takes
+  depends on the host: about a second for the interpreter alone, several more with pandas and Matplotlib.
+- A package loads on import only where Python can wait for it: in the program and at the prompt, not inside a callback that
+  JavaScript calls. There the import fails with `ModuleNotFoundError` saying to name the package in `packages`.
 - The interactive interpreter is CPython's basic REPL only: no PyREPL (colours, multi-line editing, history, completion),
   and `sys.flags.interactive` and `sys.flags.inspect` stay 0 with `-i`.
 - `sys.exit(n)` with `n & 255` above 119 exits with 119 (CPython exits with up to 255). `-I` and `-P` do not take the

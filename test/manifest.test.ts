@@ -52,11 +52,11 @@ describe("the manifest", () => {
     for (const artifact of manifest.artifacts) expect(artifact.from).toBe((NOTICE_FILES as readonly string[]).includes(artifact.name) ? artifact.name : `upstream/${artifact.name}`);
   });
 
-  it("offers as packages exactly the wheels it carries, and loads pandas and matplotlib by default", () => {
+  it("offers as packages to preload exactly the wheels it carries, and preloads none by default (any loads when imported)", () => {
     const option = manifest.options.packages;
     expect([...option.values]).toEqual(PACKAGE_NAMES);
     expect([...option.values].sort()).toEqual(lock.files.flatMap(file => (file.role === "wheel" ? [file.package] : [])).sort());
-    expect(option.default).toEqual(["pandas", "matplotlib"]);
+    expect(option.default).toEqual([]);
     for (const [name, file] of Object.entries(WHEELS)) expect(lock.files.find(item => item.role === "wheel" && item.package === name)?.name, name).toBe(file);
   });
 
@@ -66,7 +66,8 @@ describe("the manifest", () => {
       const closure = wheelsFor(pyodideLock, [name]);
       expect(closure.filter(item => !shipped.has(item.fileName)).map(item => item.name), `what ${name} needs`).toEqual([]);
     }
-    expect(wheelsFor(pyodideLock, manifest.options.packages.default).map(item => item.fileName).sort()).toEqual(Object.values(WHEELS).sort());
+    // Everything the release carries is something an offered package needs, so no wheel is shipped for nothing.
+    expect(wheelsFor(pyodideLock, manifest.options.packages.values).map(item => item.fileName).sort()).toEqual(Object.values(WHEELS).sort());
   });
 
   it("pins each wheel to the file name, version and sha256 that Pyodide's own lock gives it", async () => {

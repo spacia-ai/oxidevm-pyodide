@@ -21,9 +21,9 @@ export type ProcessSignals = Host<"process.signals">["process"]["signals"];
 export interface CommandHost {
   /** The module's lifetime: it ends when the module stops. */
   readonly signal: AbortSignal;
-  /** The packages the program asked for through the module's `packages` option (defaults applied). */
+  /** The packages to load before the program starts, from the module's `packages` option (default none). */
   readonly options: { readonly packages: readonly PackageName[] };
-  readonly artifacts: { bytes(name: ShippedFile): Promise<Uint8Array<ArrayBuffer>> };
+  readonly artifacts: { bytes(name: ShippedFile): Promise<Uint8Array<ArrayBuffer>>; compile(name: "pyodide.asm.wasm"): Promise<WebAssembly.Module> };
   readonly kit: Pick<Host["kit"], "errno" | "runNative">;
   readonly stdio: Host["stdio"];
   readonly fs: SyncFiles;

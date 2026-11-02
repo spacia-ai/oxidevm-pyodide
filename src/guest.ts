@@ -1,6 +1,7 @@
 import type { PyodideInterface } from "pyodide";
 import type { nativeRunner } from "./native-bridge.ts";
 import { HIDE_BRIDGE_SOURCE } from "./python/hide-bridge.ts";
+import { LAZY_PACKAGES_SOURCE } from "./python/lazy-packages.ts";
 import { PROCESS_PATCH_SOURCE } from "./python/process-patch.ts";
 import { OXIDEVM_MODULE_SOURCE } from "./python/oxidevm-module.ts";
 import { SLEEP_PATCH_SOURCE } from "./python/sleep-patch.ts";
@@ -30,15 +31,28 @@ function runIsolated(py: PyodideInterface, source: string): void {
   }
 }
 
+/** The shipped packages that load when imported (`LoadedPython` of src/python-loader.ts). */
+export interface ShippedPackages {
+  /** Top-level module names to the package that provides them. */
+  readonly imports: ReadonlyMap<string, string>;
+  /** The packages loaded before the program started. */
+  readonly loaded: ReadonlySet<string>;
+  /** Loads packages and what they need, and resolves with every package now loaded. */
+  install(names: readonly string[]): Promise<readonly string[]>;
+}
+
 export interface GuestBridges {
   readonly run: ReturnType<typeof nativeRunner>;
   readonly sockets: SocketBridge;
   readonly interrupts: Interrupts;
+  /** Absent: no package loads on import (the finder is not installed). */
+  readonly packages?: ShippedPackages;
 }
 
 /**
  * Makes the VM visible to Python: the JS functions behind `oxidevm.run` and the sockets, the `oxidevm` module itself,
- * the real process id, user, group and working directory, and a `time.sleep` that Ctrl+C ends. Python code never sees the
+ * the real process id, user, group and working directory, a `time.sleep` that Ctrl+C ends, and, with `packages`, the
+ * import hook that loads a shipped package when the program imports it. Python code never sees the
  * bridge module's name as part of a contract; it is private to the `oxidevm` module and the patches.
  */
 export function installGuest(py: PyodideInterface, identity: ProcessIdentity, bridges: GuestBridges): void {
@@ -56,6 +70,7 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
     recv: (handle: unknown, size: unknown, timeoutMs: unknown) => held(sockets.recv(handle, size, timeoutMs)),
     close: (handle: unknown) => held(sockets.close(handle)),
     sleep: (milliseconds: unknown) => interrupts.sleep(typeof milliseconds === "number" && milliseconds > 0 ? milliseconds : 0),
+    load_packages: (name: unknown) => held(typeof name === "string" && bridges.packages !== undefined ? bridges.packages.install([name]) : Promise.reject(new TypeError("no package to load"))),
     // Called by Python after every wait: a held Ctrl+C raises KeyboardInterrupt now, as after any system call in CPython.
     check_interrupt: () => { interrupts.restore(); py.checkInterrupt(); },
     // Raises the failure of a wait in Python, as the JsException it would have been.
@@ -64,6 +79,10 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
   py.registerJsModule("_oxidevm_process", { pid: identity.pid, uid: identity.uid, gid: identity.gid, cwd: identity.cwd });
   py.runPython(PROCESS_PATCH_SOURCE);
   runIsolated(py, SLEEP_PATCH_SOURCE);
+  if (bridges.packages !== undefined) {
+    py.registerJsModule("_oxidevm_packages", { imports: Object.fromEntries(bridges.packages.imports), loaded: [...bridges.packages.loaded] });
+    runIsolated(py, LAZY_PACKAGES_SOURCE);
+  }
   const sitePackages: unknown = py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
   if (typeof sitePackages !== "string") throw new Error("Pyodide did not report its site-packages directory");
   py.FS.writeFile(`${sitePackages}/oxidevm.py`, OXIDEVM_MODULE_SOURCE);

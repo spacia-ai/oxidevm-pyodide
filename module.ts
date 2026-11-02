@@ -36,7 +36,7 @@ export default defineModule({
       packages: {
         type: "enum-set",
         values: ["contourpy", "cycler", "fonttools", "kiwisolver", "matplotlib", "numpy", "packaging", "pandas", "pillow", "pyparsing", "python-dateutil", "pytz", "six"],
-        default: ["pandas", "matplotlib"],
+        default: [],
       },
     },
     license: {

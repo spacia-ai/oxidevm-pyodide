@@ -10,7 +10,7 @@ import { PYTHON_VERSION } from "../src/cli.ts";
 import { createCommand } from "../src/command.ts";
 import type { CommandHost } from "../src/host-types.ts";
 import type { Engine, PyodideOptions } from "../src/python-loader.ts";
-import type { PythonCommand, ShippedFile } from "../src/shipped.ts";
+import type { PythonCommand } from "../src/shipped.ts";
 import { processId } from "./support/brands.ts";
 import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
 import { fakeProcess } from "./support/fake-process.ts";
@@ -44,7 +44,8 @@ interface Setup {
   readonly close: () => Promise<void>;
   readonly failures: string[];
   readonly logs: string[];
-  readonly artifactsRead: ShippedFile[];
+  /** Every artifact read (its name) or compiled (`compile <name>`), in order. */
+  readonly artifactsRead: string[];
   readonly startedWith: PyodideOptions[];
   readonly sockets: ReturnType<typeof fakeSockets>;
   readonly stdio: ReturnType<typeof fakeStdio>;
@@ -79,7 +80,7 @@ function setup(options: SetupOptions = {}): Setup {
   const children = fakeProcess(() => ({}));
   const sockets = fakeSockets();
   sockets.listen("unix:/workspace/_oxidevm/echo.sock", echoUpperCase());
-  const failures: string[] = [], logs: string[] = [], artifactsRead: ShippedFile[] = [], startedWith: PyodideOptions[] = [], events: string[] = [];
+  const failures: string[] = [], logs: string[] = [], artifactsRead: string[] = [], startedWith: PyodideOptions[] = [], events: string[] = [];
   const signals = fakeSignals(events, { pendingAtTrap: options.interruptAtTrap === true });
   const toStderr = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
   const lifetime = new AbortController();
@@ -87,7 +88,11 @@ function setup(options: SetupOptions = {}): Setup {
   const host: CommandHost = {
     signal: lifetime.signal,
     options: { packages: [] },
-    artifacts: { bytes: options.bytes ?? ((name) => { artifactsRead.push(name); return Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : name)); }) },
+    artifacts: {
+      bytes: options.bytes ?? ((name) => { artifactsRead.push(name); return Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : name)); }),
+      // The runner answers with the module the VM compiled once; the test counts the requests.
+      compile: name => { artifactsRead.push(`compile ${name}`); return Promise.resolve(new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))); },
+    },
     kit,
     stdio: stdio.streams,
     fs: options.fs?.(files.files) ?? files.files,
@@ -99,6 +104,7 @@ function setup(options: SetupOptions = {}): Setup {
   };
   const engine: Engine = {
     scope: { fetch: () => Promise.reject(new Error("no network in tests")) },
+    wasm: { instantiateStreaming: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")), instantiate: () => Promise.reject(new Error("not used")) },
     createPyodideModule: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")),
     loadPyodide: async started => {
       startedWith.push(started);
@@ -192,8 +198,8 @@ describe("a command that answers without starting Python", () => {
 
   it("lets a file that does not match its pin stop it, as the runner's integrity failure, not as a status", async () => {
     await writeFile(join(root, "workspace/ok.py"), "print('never runs')");
-    const tampered = new Error("pyodide.asm.wasm does not match its sha256 pin");
-    const s = setup({ bytes: name => (name === "pyodide.asm.wasm" ? Promise.reject(tampered) : Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : "x"))) });
+    const tampered = new Error("python_stdlib.zip does not match its sha256 pin");
+    const s = setup({ bytes: name => (name === "python_stdlib.zip" ? Promise.reject(tampered) : Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : "x"))) });
     await expect(s.main(["/workspace/ok.py"])).rejects.toBe(tampered);
     expect(s.startedWith).toEqual([]);
     expect(s.stdio.take()).toEqual({ stdout: "", stderr: "" });
@@ -209,7 +215,8 @@ describe("a command that runs", { timeout: 30_000 }, () => {
     expect(s.stdio.take()).toEqual({ stdout: "ran ['/workspace/program.py', 'x', 'y'] 777 1000 100 /workspace /home/user None\n", stderr: "" });
     expect(s.startedWith).toHaveLength(1);
     expect(s.startedWith[0]?.env).toEqual({ MPLBACKEND: "Agg", PATH: "/usr/bin", HOME: "/home/user" });
-    expect([...s.artifactsRead].sort()).toEqual(["pyodide-lock.json", "pyodide.asm.wasm", "python_stdlib.zip"]);
+    // The interpreter is the module the VM compiled once (one request, no bytes); no wheel is read for a program that imports none.
+    expect([...s.artifactsRead].sort()).toEqual(["compile pyodide.asm.wasm", "pyodide-lock.json", "python_stdlib.zip"]);
     await s.close();
   });
 

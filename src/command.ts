@@ -68,11 +68,15 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       if (prepared.kind === "failed") return host.fail(prepared.status, prepared.message);
 
       const info = await host.process.info();
-      const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: text => { host.log(text); } }, engine);
+      const python = await loadPython({
+        packages: host.options.packages, bytes: name => host.artifacts.bytes(name), compile: name => host.artifacts.compile(name),
+        env: pythonEnvironment(io.env), log: text => { host.log(text); },
+      }, engine);
+      const { py } = python;
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
       const interrupts = createInterrupts();
-      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts });
+      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts, packages: python });
       // Defence in depth, not a boundary: a program in the VM must not reach the page's JavaScript through Python.
       if (io.invocation.kind === "command") hideJavaScript(py);
       const trap = await catchInterrupts(host.process.signals, interrupts);
