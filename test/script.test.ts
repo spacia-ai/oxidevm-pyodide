@@ -112,13 +112,16 @@ describe("pythonEnvironment", () => {
   });
 });
 
+/** What a request without -m, -i or a prompt carries besides the program. */
+const SOURCE = { run: "source", module: "", interactive: false, banner: false, argv0: "python3" } as const;
+
 describe("prepareProgram from a file", () => {
   it("reads the file, at most 16 MiB of it, and describes it as CPython would: absolute name, sys.path[0] its real directory", () => {
     const files = host({ files: { "/workspace/project/tool.py": "print('héllo')\n" }, links: { "/workspace/project/tool.py": "/workspace/tools/real.py" } });
     expect(prepareProgram(files, { ...COMMAND, args: ["tool.py", "a"] }, line(["tool.py", "a"]))).toEqual({
       kind: "ready",
       request: {
-        filename: "/workspace/project/tool.py", source: "print('héllo')\n", argv: ["tool.py", "a"], origArgv: ["python3", "tool.py", "a"],
+        ...SOURCE, filename: "/workspace/project/tool.py", source: "print('héllo')\n", argv: ["tool.py", "a"], origArgv: ["python3", "tool.py", "a"],
         executable: "/usr/local/bin/python3", path0: "/workspace/tools", file: "/workspace/project/tool.py", cacheSource: false,
       },
     });
@@ -158,8 +161,37 @@ describe("prepareProgram from -c", () => {
   it("runs the text after -c as <string>, with a newline as CPython adds, from the working directory, kept for tracebacks", () => {
     expect(prepareProgram(host(), { ...COMMAND, args: ["-uc", "print(1)", "x"] }, line(["-uc", "print(1)", "x"]))).toEqual({
       kind: "ready",
-      request: { filename: "<string>", source: "print(1)\n", argv: ["-c", "x"], origArgv: ["python3", "-uc", "print(1)", "x"], executable: "/usr/local/bin/python3", path0: "", file: null, cacheSource: true },
+      request: { ...SOURCE, filename: "<string>", source: "print(1)\n", argv: ["-c", "x"], origArgv: ["python3", "-uc", "print(1)", "x"], executable: "/usr/local/bin/python3", path0: "", file: null, cacheSource: true },
     });
+  });
+});
+
+describe("prepareProgram from -m", () => {
+  it("names the module for runpy, reads nothing, and puts the working directory first on sys.path as CPython does", () => {
+    const files = host();
+    expect(prepareProgram(files, { ...COMMAND, args: ["-m", "json.tool", "x"] }, line(["-m", "json.tool", "x"]))).toEqual({
+      kind: "ready",
+      request: { ...SOURCE, run: "module", module: "json.tool", filename: "", source: "", argv: ["-m", "x"], origArgv: ["python3", "-m", "json.tool", "x"], executable: "/usr/local/bin/python3", path0: "/workspace/project", file: null, cacheSource: false },
+    });
+    expect(files.asked).toEqual([]);
+  });
+});
+
+describe("prepareProgram for the interactive interpreter", () => {
+  it("reads nothing from a terminal: the program is typed at the prompt, after the banner", () => {
+    const input = host({ input: new TextEncoder().encode("never read\n") });
+    const terminal: ProgramHost = { ...input, stdinIsTerminal: true, fs: { ...input.fs, read: () => { throw new Error("standard input was read before the prompt"); } } };
+    expect(prepareProgram(terminal, COMMAND, line([]))).toEqual({
+      kind: "ready",
+      request: { ...SOURCE, run: "none", interactive: true, banner: true, filename: "<stdin>", source: "", argv: [""], origArgv: ["python3"], executable: "/usr/local/bin/python3", path0: "", file: null, cacheSource: false },
+    });
+    expect(prepareProgram(terminal, { ...COMMAND, args: ["-q", "-", "a"] }, line(["-q", "-", "a"]))).toMatchObject({ kind: "ready", request: { run: "none", interactive: true, banner: false, argv: ["-", "a"] } });
+  });
+
+  it("prompts on a pipe with -i, and keeps the program of -c or a file before the prompt, without a banner", () => {
+    expect(prepareProgram(host(), COMMAND, line(["-i"]))).toMatchObject({ kind: "ready", request: { run: "none", interactive: true, banner: true } });
+    expect(prepareProgram(host(), COMMAND, line(["-i", "-c", "x = 1"]))).toMatchObject({ kind: "ready", request: { run: "source", interactive: true, banner: false, source: "x = 1\n" } });
+    expect(prepareProgram({ ...host(), stdinIsTerminal: true }, COMMAND, line(["-c", "pass"]))).toMatchObject({ kind: "ready", request: { run: "source", interactive: false, banner: false } });
   });
 });
 
@@ -168,7 +200,7 @@ describe("prepareProgram from standard input", () => {
     const input = host({ input: new TextEncoder().encode("import sys\nprint(sys.argv)\n") });
     expect(prepareProgram(input, { ...COMMAND, args: ["-", "a"] }, line(["-", "a"]))).toEqual({
       kind: "ready",
-      request: { filename: "<stdin>", source: "import sys\nprint(sys.argv)\n", argv: ["-", "a"], origArgv: ["python3", "-", "a"], executable: "/usr/local/bin/python3", path0: "", file: "<stdin>", cacheSource: false },
+      request: { ...SOURCE, filename: "<stdin>", source: "import sys\nprint(sys.argv)\n", argv: ["-", "a"], origArgv: ["python3", "-", "a"], executable: "/usr/local/bin/python3", path0: "", file: "<stdin>", cacheSource: false },
     });
     expect(prepareProgram(host(), COMMAND, line([]))).toMatchObject({ kind: "ready", request: { source: "", argv: [""], origArgv: ["python3"] } });
   });

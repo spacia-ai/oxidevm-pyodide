@@ -161,16 +161,6 @@ describe("a command that answers without starting Python", () => {
     expect(await s.main(["--help"])).toBe(0);
   });
 
-  it("refuses the interactive interpreter: no program with a terminal on standard input, and -i", async () => {
-    const s = setup();
-    const refusal = "the interactive interpreter is not supported yet; use FILE, -c CODE or -";
-    expect(await s.main([], { terminals: { stdin: true } })).toBe(2);
-    expect(await s.main(["-"], { terminals: { stdin: true }, invocation: PYTHON })).toBe(2);
-    expect(await s.main(["-i", "-c", "pass"])).toBe(2);
-    expect(s.failures).toEqual([`2: python3: ${refusal}`, `2: python: ${refusal}`, `2: python3: ${refusal}`]);
-    expect(s.startedWith).toEqual([]);
-  });
-
   it("refuses to run in a directory Python cannot see, or a file there, instead of running somewhere else", async () => {
     const s = setup();
     const where = (place: string): string => `2: python3: cannot run in '${place}': this Python sees the VM's files only under /workspace, /tmp and $HOME`;
@@ -370,4 +360,26 @@ import js`;
     expect(s.logs).toEqual([JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: "the host broke" })]);
     await s.close();
   });
+});
+
+describe("the interactive interpreter and -m, end to end", () => {
+  it("starts Python for the interactive interpreter: no program with a terminal on standard input, and -i", async () => {
+    const s = setup();
+    expect(await s.main(["-q"], { terminals: { stdin: true } })).toBe(0);
+    expect(await s.main(["-q", "-"], { terminals: { stdin: true }, invocation: PYTHON, stdin: "6 * 7\n" })).toBe(0);
+    expect(await s.main(["-q", "-i", "-c", "x = 5"], { stdin: "x + 1\n" })).toBe(0);
+    expect(s.failures).toEqual([]);
+    expect(s.startedWith).toHaveLength(3);
+    expect(s.stdio.take()).toEqual({ stdout: "42\n6\n", stderr: ">>> \n>>> >>> \n>>> >>> \n" });
+  }, 60_000);
+
+  it("runs -m through runpy and words a module it cannot find as CPython does, after sys.executable", async () => {
+    const s = setup();
+    await mkdir(s.real("/workspace/tools"), { recursive: true });
+    await writeFile(s.real("/workspace/tools/hello.py"), "import sys\nprint('hello', sys.argv)\n");
+    expect(await s.main(["-m", "tools.hello", "a"], { cwd: "/workspace" })).toBe(0);
+    expect(await s.main(["-m", "nosuch"])).toBe(1);
+    expect(await s.main(["-m", "nosuch"], { invocation: APPLICATION })).toBe(1);
+    expect(s.stdio.take()).toEqual({ stdout: "hello ['/workspace/tools/hello.py', 'a']\n", stderr: "/usr/local/bin/python3: No module named nosuch\npyodide: No module named nosuch\n" });
+  }, 60_000);
 });

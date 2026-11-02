@@ -15,9 +15,10 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   module starts with it. The expectations come from real CPython: `test/fixtures/cpython-cli.json`, recorded by
   `python3.14 -I scripts/record-cpython-cli.py` (`--check` compares without writing). Add a case there before changing
   behaviour that CPython defines; tests normalise only the interpreter path and the version text. Behaviour that differs
-  from CPython on purpose (no REPL, no `-m`, statuses limited to 119, ignored `-I` and `-P`) is tested on its own and
-  listed in README.md.
-- Anything that can be refused (usage, a terminal on standard input, a directory Python cannot see, an unreadable program)
+  from CPython on purpose (the basic REPL only, statuses limited to 119, ignored `-I` and `-P`) is tested on its own and
+  listed in README.md. Terminal sessions of the REPL are recorded the same way (`sessions`: standard input a PTY in cooked
+  mode, `PYTHON_BASIC_REPL=1`, readline unimportable) and replayed by `test/repl.test.ts`.
+- Anything that can be refused (usage, a directory Python cannot see, an unreadable program)
   is refused before Pyodide loads, so that it costs nothing.
 - Ctrl+C (`src/signals.ts`): SIGINT is trapped once Pyodide has loaded, and the runner arms Pyodide's interrupt buffer from
   inside its own `try`. Pyodide's event loop must never see a pending interrupt: every JavaScript call that Python waits for

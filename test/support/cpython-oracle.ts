@@ -19,6 +19,22 @@ export interface OracleCase {
   readonly exit: OracleExit;
 }
 
+/** One step of a terminal session: what was typed, sent at a prompt or while the previous input still ran. */
+export interface SessionStep {
+  readonly input: string;
+  readonly when: "prompt" | "running";
+}
+
+/** A session at a terminal (standard input a PTY in cooked mode; standard output and error recorded apart). */
+export interface OracleSession {
+  readonly name: string;
+  readonly argv: readonly string[];
+  readonly steps: readonly SessionStep[];
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exit: OracleExit;
+}
+
 export interface Oracle {
   readonly provenance: {
     readonly interpreter: string;
@@ -32,6 +48,7 @@ export interface Oracle {
   /** The programs the cases run, by path relative to `cwd`. */
   readonly files: Readonly<Record<string, string>>;
   readonly cases: readonly OracleCase[];
+  readonly sessions: readonly OracleSession[];
 }
 
 function text(value: unknown, what: string): string {
@@ -58,10 +75,28 @@ function decodeCase(value: unknown, index: number): OracleCase {
   };
 }
 
+function decodeStep(value: unknown, what: string): SessionStep {
+  if (!isRecord(value)) throw new Error(`cpython-cli.json: ${what} must be an object`);
+  const when = value["when"];
+  if (when !== "prompt" && when !== "running") throw new Error(`cpython-cli.json: ${what}.when is unknown`);
+  return { input: text(value["input"], `${what}.input`), when };
+}
+
+function decodeSession(value: unknown, index: number): OracleSession {
+  const what = `sessions[${String(index)}]`;
+  if (!isRecord(value)) throw new Error(`cpython-cli.json: ${what} must be an object`);
+  const argv = value["argv"], steps = value["steps"];
+  if (!isStringArray(argv) || argv.length === 0 || !Array.isArray(steps)) throw new Error(`cpython-cli.json: ${what} needs argv and steps`);
+  return {
+    name: text(value["name"], `${what}.name`), argv, steps: Array.from<unknown>(steps).map((step, at) => decodeStep(step, `${what}.steps[${String(at)}]`)),
+    stdout: text(value["stdout"], `${what}.stdout`), stderr: text(value["stderr"], `${what}.stderr`), exit: decodeExit(value["exit"], `${what}.exit`),
+  };
+}
+
 function decodeOracle(value: unknown): Oracle {
   if (!isRecord(value) || value["schemaVersion"] !== 1) throw new Error("cpython-cli.json: schemaVersion 1 expected");
-  const provenance = value["provenance"], files = value["files"], cases = value["cases"];
-  if (!isRecord(provenance) || !isRecord(files) || !Array.isArray(cases)) throw new Error("cpython-cli.json: provenance, files and cases expected");
+  const provenance = value["provenance"], files = value["files"], cases = value["cases"], sessions = value["sessions"];
+  if (!isRecord(provenance) || !isRecord(files) || !Array.isArray(cases) || !Array.isArray(sessions)) throw new Error("cpython-cli.json: provenance, files, cases and sessions expected");
   return {
     provenance: {
       interpreter: text(provenance["interpreter"], "provenance.interpreter"), version: text(provenance["version"], "provenance.version"),
@@ -69,6 +104,7 @@ function decodeOracle(value: unknown): Oracle {
     },
     files: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, text(content, `files.${name}`)])),
     cases: Array.from<unknown>(cases).map(decodeCase),
+    sessions: Array.from<unknown>(sessions).map(decodeSession),
   };
 }
 
@@ -83,11 +119,19 @@ export function oracleCase(name: string): OracleCase {
 }
 
 /**
+ * The interactive interpreter's banner line (`Python <sys.version> on <sys.platform>`) with the build and the platform
+ * left out: CPython's names its compiler and Linux, the module's Pyodide's and Emscripten. Apply it to both sides.
+ */
+export function withoutBuild(text: string): string {
+  return text.replace(/^Python (\d+\.\d+\.\d+) \(.* on \S+$/mu, "Python $1 (build) on (platform)");
+}
+
+/**
  * Text as the module would print it for the same command line: the recorded interpreter's path becomes the command's
- * path, and its version the module's. Nothing else is changed.
+ * path, and its version the module's; the banner's build is left out (`withoutBuild`). Nothing else is changed.
  */
 export function normalised(recorded: string, module: { readonly executable: string; readonly version: string }): string {
-  return recorded.replaceAll(oracle.provenance.executable, module.executable).replaceAll(`Python ${oracle.provenance.version}`, `Python ${module.version}`);
+  return withoutBuild(recorded.replaceAll(oracle.provenance.executable, module.executable).replaceAll(`Python ${oracle.provenance.version}`, `Python ${module.version}`));
 }
 
 /** What CPython's option parser did with a case, read from the recording rather than from the module's parser. */

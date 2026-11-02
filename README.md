@@ -66,14 +66,28 @@ about a second.
 ## What the program sees
 
 - **The command line** is read as CPython 3.14 reads its own: `python3 FILE [arg ...]`, `python3 -c CODE [arg ...]`,
-  `python3 - [arg ...]` and `python3` alone, which read the program from standard input (to its end, at most 16 MiB) when
-  standard input is not a terminal. Flags group (`-uc CODE`), and option parsing stops at the file, at `-` and at `--`.
-  `-V` and `--version` print `Python 3.14.2`, `-h` and `--help` print the options. `-u`, `-B`, `-E`, `-s`, `-I`, `-P` and
-  `-q` are accepted and change nothing: `PYTHON*` variables are never passed on, so `-E` and `-I` have nothing to ignore.
-  `-m` and every other option are refused with CPython's own message, the usage line and status 2. When the application
-  starts the module, the same rules apply and the module calls itself `pyodide`.
-- **How it was started**, as CPython reports it: `sys.argv` is the file as typed, `-c` or `-`, then the arguments (`['']`
-  for a program read from standard input without `-`); `sys.orig_argv` is the whole command line; `sys.executable` is the
+  `python3 -m MODULE [arg ...]`, `python3 - [arg ...]` and `python3` alone, which read the program from standard input (to
+  its end, at most 16 MiB) when standard input is not a terminal. Flags group (`-uc CODE`, `-um MODULE`), and option parsing
+  stops at the file, at `-`, at `--` and after `-c` or `-m`. `-V` and `--version` print `Python 3.14.2`, `-h` and `--help`
+  print the options. `-i` starts the interactive interpreter after the program and `-q` leaves out its banner. `-u`, `-B`,
+  `-E`, `-s`, `-I` and `-P` are accepted and change nothing: `PYTHON*` variables are never passed on, so `-E` and `-I` have
+  nothing to ignore. Every other option is refused with CPython's own message, the usage line and status 2. When the
+  application starts the module, the same rules apply and the module calls itself `pyodide`.
+- **`-m MODULE`** runs the module with runpy, as CPython does: the working directory comes first on `sys.path`, `sys.argv[0]`
+  and `__file__` are the module's file (a package runs its `__main__`), and its traceback shows runpy's frames as
+  `<frozen runpy>`. A module that cannot be found prints `<sys.executable>: No module named MODULE` (`pyodide: ...` when the
+  application starts the module) and exits with 1; `-m` without a module is a usage error.
+- **The interactive interpreter** is CPython's basic REPL, the one `PYTHON_BASIC_REPL=1` selects: it starts when standard
+  input is a terminal and there is no program (`python3`, `python3 -`), with `-i` after a program, and with `-i` alone even
+  on a pipe. The VM's terminal edits the line; there is no history and no completion. The banner (unless `-q`) and the
+  prompts `sys.ps1` and `sys.ps2` go to standard error. An expression's value is printed, a compound statement continues
+  until an empty line, an error prints its traceback with the line typed, and the prompt returns. Ctrl+C at a prompt prints
+  `KeyboardInterrupt` and drops the unfinished input; Ctrl+C while an input runs interrupts it. Ctrl+D at the start of a line
+  ends the session with status 0, or killed by SIGINT once a KeyboardInterrupt has been reported in it, as CPython 3.14
+  does; `sys.exit(n)` and `exit(n)` end it with `n`. With `-i`, an error or `SystemExit` of the program prints its
+  traceback and the prompt follows.
+- **How it was started**, as CPython reports it: `sys.argv` is the file as typed, `-c`, the module's file or `-`, then the
+  arguments (`['']` for a program read from standard input without `-`, and at a prompt without a program); `sys.orig_argv` is the whole command line; `sys.executable` is the
   command's path (`/usr/local/bin/python3`, or empty when the application starts the module); the program's name in
   tracebacks is its absolute path, `<string>` or `<stdin>`; `__file__` is the absolute path (`<stdin>` for standard input,
   none for `-c`); `sys.path[0]` is the file's real directory (`''`, the working directory, for `-c` and standard input);
@@ -168,8 +182,8 @@ installs inside Python are out of scope.
 - Every run starts Pyodide again and unpacks the packages the application chose; how long that takes depends on the host:
   about a second for the interpreter alone, several more with pandas and Matplotlib. Turn the commands on with the smallest
   `packages` list that the programs need.
-- There is no interactive interpreter yet: `-i`, and no program or `-` with a terminal on standard input, stop with
-  `python3: the interactive interpreter is not supported yet; use FILE, -c CODE or -` and status 2. `-m` is refused too.
+- The interactive interpreter is CPython's basic REPL only: no PyREPL (colours, multi-line editing, history, completion),
+  and `sys.flags.interactive` and `sys.flags.inspect` stay 0 with `-i`.
 - `sys.exit(n)` with `n & 255` above 119 exits with 119 (CPython exits with up to 255). `-I` and `-P` do not take the
   program's directory off `sys.path`, as CPython does with them.
 - Only Ctrl+C (SIGINT) reaches the program. SIGTERM, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 keep their default action, which

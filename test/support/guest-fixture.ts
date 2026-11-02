@@ -43,6 +43,8 @@ export interface CommandLineOptions {
   readonly stdin?: string;
   readonly argv0?: string;
   readonly executable?: string;
+  /** Whether standard input is a terminal (default: not). */
+  readonly terminal?: boolean;
 }
 
 /**
@@ -111,7 +113,7 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     if (line.kind !== "run") throw new Error(`${args.join(" ")} is not a program to run`);
     const report = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
     line.warnings.forEach(report);
-    const prepared = prepareProgram({ fs: files.files, errnoOf: kit.errno.of, stdin: stdio.streams.stdin }, launch, line);
+    const prepared = prepareProgram({ fs: files.files, errnoOf: kit.errno.of, stdin: stdio.streams.stdin, stdinIsTerminal: options.terminal === true }, launch, line);
     if (prepared.kind === "failed") {
       report(prepared.message);
       return { status: prepared.status, ...stdio.take() };
@@ -123,6 +125,8 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     } finally {
       // Each run is a process of its own: Pyodide watches for Ctrl+C only once the next runner arms it again.
       py.setInterruptBuffer(new Int32Array(1));
+      // The builtin exit() closes sys.stdin, as in CPython; the next process would have a fresh one.
+      py.runPython("import sys as _s\nif _s.stdin.closed:\n    _s.stdin = open(0, 'r', encoding=_s.stdin.encoding, errors=_s.stdin.errors, closefd=False)\ndel _s");
     }
   }
 

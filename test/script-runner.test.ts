@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PYTHON_VERSION } from "../src/cli.ts";
-import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
+import { normalised, oracle, oracleFiles, recordedOutcome, withoutBuild } from "./support/cpython-oracle.ts";
 import { startGuest } from "./support/guest-fixture.ts";
 import type { GuestFixture } from "./support/guest-fixture.ts";
 
@@ -214,7 +214,7 @@ describe("how the program was started, against CPython 3.14", () => {
   for (const recorded of cases) {
     it(`${recorded.name}: sys.argv, sys.orig_argv, sys.executable, sys.path[0], __file__, the program name, output and status`, async () => {
       const result = await guest.runCommandLine(recorded.argv.slice(1), { cwd: oracle.provenance.cwd, stdin: recorded.stdin, argv0: oracle.provenance.argv0, executable: MODULE.executable });
-      expect(result).toEqual({ status: recorded.exit.kind === "exited" ? recorded.exit.code : -1, stdout: normalised(recorded.stdout, MODULE), stderr: normalised(recorded.stderr, MODULE) });
+      expect({ ...result, stderr: withoutBuild(result.stderr) }).toEqual({ status: recorded.exit.kind === "exited" ? recorded.exit.code : -1, stdout: normalised(recorded.stdout, MODULE), stderr: normalised(recorded.stderr, MODULE) });
     });
   }
 });

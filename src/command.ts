@@ -1,5 +1,5 @@
 import type { CommandHooks, CommandIO } from "@oxidevm/sdk/wasm";
-import { helpText, interactiveRefusal, parseCommandLine, usageError, versionText } from "./cli.ts";
+import { helpText, parseCommandLine, usageError, versionText } from "./cli.ts";
 import type { CommandLine } from "./cli.ts";
 import { guestProcess } from "./identity.ts";
 import { hideJavaScript, installGuest } from "./guest.ts";
@@ -47,7 +47,8 @@ function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandL
 
 /**
  * The command: `main(io)` reads the command line as CPython 3.14 does and runs the program it names (a file, the text
- * after -c, or standard input) with the trees of the VM that Python sees mounted. Everything that can be refused is refused
+ * after -c, a module after -m, or standard input) with the trees of the VM that Python sees mounted, and CPython's basic
+ * interactive interpreter when standard input is a terminal with no program, or after the program with -i. Everything that can be refused is refused
  * before Python starts, so a usage error, a missing file or a directory Python cannot see costs nothing. Ctrl+C is
  * KeyboardInterrupt once the program runs; left unhandled, it ends the process killed by SIGINT, as with CPython.
  */
@@ -60,10 +61,10 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       const line = parseCommandLine(io.args);
       if (line.kind !== "run") return answer(host, io, launch.argv0, line);
       const trees = visibleTrees(io.env["HOME"], host.fs);
-      const refusal = interactiveRefusal(launch.argv0, line, io.terminals.stdin) ?? placementRefusal(launch.argv0, launch.cwd, line, trees);
+      const refusal = placementRefusal(launch.argv0, launch.cwd, line, trees);
       if (refusal !== undefined) return host.fail(2, refusal);
       for (const warning of line.warnings) host.log(warning);
-      const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin }, launch, line);
+      const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin, stdinIsTerminal: io.terminals.stdin }, launch, line);
       if (prepared.kind === "failed") return host.fail(prepared.status, prepared.message);
 
       const info = await host.process.info();

@@ -23,6 +23,19 @@ export interface Launch {
 
 /** What the runner needs: the program's text and everything Python reports about how it was started. */
 export interface ProgramRequest {
+  /**
+   * What runs before any interactive interpreter: `source` (a file, -c or standard input), `module` (-m, which runpy
+   * finds and runs), or `none` (the interactive interpreter alone).
+   */
+  readonly run: "source" | "module" | "none";
+  /** The module -m names, or "". */
+  readonly module: string;
+  /** Whether CPython's basic interactive interpreter runs, after the program when there is one. */
+  readonly interactive: boolean;
+  /** Whether the interactive interpreter prints its banner first (no program, and no -q). */
+  readonly banner: boolean;
+  /** The name messages of the runner start with when `executable` is empty (an application start). */
+  readonly argv0: string;
   /** The program's name in tracebacks: its absolute path, `<string>` for -c or `<stdin>`. */
   readonly filename: string;
   readonly source: string;
@@ -42,6 +55,8 @@ export interface ProgramHost {
   readonly fs: Pick<SyncFiles, "readFile" | "read" | "realpath">;
   readonly errnoOf: (error: unknown) => number | undefined;
   readonly stdin: FileDescriptor;
+  /** Whether standard input is a terminal: then a program from standard input is typed at the interactive interpreter. */
+  readonly stdinIsTerminal?: boolean;
 }
 
 export type Prepared =
@@ -142,24 +157,41 @@ function scriptDirectory(host: ProgramHost, path: string): string {
   }
 }
 
+/**
+ * Whether the command line starts the interactive interpreter with no program before it: standard input is the program
+ * and it is a terminal, or -i asks for it (CPython then prompts even on a pipe).
+ */
+export function startsWithPrompt(line: RunLine, stdinIsTerminal: boolean): boolean {
+  return line.program.kind === "stdin" && (stdinIsTerminal || line.interactive);
+}
+
 /** Reads the program and describes it the way CPython would to the program itself. */
 export function prepareProgram(host: ProgramHost, launch: Launch, line: RunLine): Prepared {
   const program: Program = line.program;
-  const common = { argv: line.argv, origArgv: [launch.argv0, ...launch.args], executable: launch.executable };
+  const prompt = startsWithPrompt(line, host.stdinIsTerminal === true);
+  const common = {
+    argv: line.argv, origArgv: [launch.argv0, ...launch.args], executable: launch.executable, argv0: launch.argv0, module: "",
+    interactive: line.interactive || prompt, banner: prompt && !line.quiet,
+  };
   switch (program.kind) {
     case "code":
       // CPython ends the text of -c with a newline before it compiles it.
-      return { kind: "ready", request: { ...common, filename: "<string>", source: `${program.code}\n`, path0: "", file: null, cacheSource: true } };
+      return { kind: "ready", request: { ...common, run: "source", filename: "<string>", source: `${program.code}\n`, path0: "", file: null, cacheSource: true } };
+    case "module":
+      // CPython puts the working directory first on sys.path for -m; runpy sets __file__ and argv[0] once it finds the module.
+      return { kind: "ready", request: { ...common, run: "module", module: program.module, filename: "", source: "", path0: normalizePath(launch.cwd), file: null, cacheSource: false } };
     case "stdin": {
+      // At a prompt the program is typed line by line, so nothing is read before the interpreter starts.
+      if (prompt) return { kind: "ready", request: { ...common, run: "none", filename: "<stdin>", source: "", path0: "", file: null, cacheSource: false } };
       const text = readInputProgram(host, launch.argv0);
       if (typeof text !== "string") return text;
-      return { kind: "ready", request: { ...common, filename: "<stdin>", source: text, path0: "", file: "<stdin>", cacheSource: false } };
+      return { kind: "ready", request: { ...common, run: "source", filename: "<stdin>", source: text, path0: "", file: "<stdin>", cacheSource: false } };
     }
     case "file": {
       const path = absoluteProgramPath(program.path, launch.cwd);
       const text = readFileProgram(host, launch.argv0, path);
       if (typeof text !== "string") return text;
-      return { kind: "ready", request: { ...common, filename: path, source: text, path0: scriptDirectory(host, path), file: path, cacheSource: false } };
+      return { kind: "ready", request: { ...common, run: "source", filename: path, source: text, path0: scriptDirectory(host, path), file: path, cacheSource: false } };
     }
   }
 }
@@ -172,6 +204,7 @@ export async function runProgram(py: PyodideInterface, request: ProgramRequest, 
   // The runner gets a namespace of its own, so that neither its names nor the request appear in the program's globals.
   const namespace: unknown = py.toPy({
     _request: {
+      run: request.run, module: request.module, interactive: request.interactive, banner: request.banner, argv0: request.argv0,
       filename: request.filename, source: request.source, argv: [...request.argv], orig_argv: [...request.origArgv], executable: request.executable,
       path0: request.path0, file: request.file, cache_source: request.cacheSource, arm: arm ?? null,
     },

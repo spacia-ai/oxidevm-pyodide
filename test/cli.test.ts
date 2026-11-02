@@ -2,8 +2,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { helpText, interactiveRefusal, parseCommandLine, PYTHON_VERSION, usageError, versionText } from "../src/cli.ts";
+import { helpText, parseCommandLine, PYTHON_VERSION, usageError, versionText } from "../src/cli.ts";
+import { startsWithPrompt } from "../src/script.ts";
 import type { CommandLine } from "../src/cli.ts";
+import { isStringArray } from "../src/records.ts";
 import { field } from "./support/decode.ts";
 import { normalised, oracle, recordedOutcome } from "./support/cpython-oracle.ts";
 import type { OracleCase } from "./support/cpython-oracle.ts";
@@ -17,7 +19,7 @@ const MODULE = { executable: "/usr/local/bin/python3", version: PYTHON_VERSION }
 
 /** The probe's report of how it was started, when the case ran the probe. */
 function probeReport(recorded: OracleCase): unknown {
-  if (!recorded.stdout.startsWith("{")) return undefined;
+  if (!recorded.stdout.startsWith("{\"argv\"")) return undefined;
   const report: unknown = JSON.parse(recorded.stdout);
   return report;
 }
@@ -55,9 +57,16 @@ describe("the command line, against CPython 3.14", () => {
           expect(line.warnings.map(warning => `${warning}\n`).join("")).toBe(recorded.stderr.startsWith("Expected long option\n") ? "Expected long option\n" : "");
           const report = probeReport(recorded);
           if (report === undefined) break;
-          expect(line.argv).toEqual(field(report, "argv"));
+          const argv = field(report, "argv");
           const filename = field(report, "filename");
           const program = line.program;
+          if (program.kind === "module") {
+            // runpy puts the module's file in place of -m once it has found it.
+            expect(line.argv).toEqual(["-m", ...(isStringArray(argv) ? argv.slice(1) : ["(not a list of text)"])]);
+            expect(filename).toMatch(new RegExp(`/${program.module.replaceAll(".", "/")}(/__main__)?\\.py$`, "u"));
+            break;
+          }
+          expect(line.argv).toEqual(argv);
           if (filename === "<string>") expect(program).toEqual({ kind: "code", code: oracle.files["sub/probe.py"]?.trimEnd() });
           else if (filename === "<stdin>") expect(program).toEqual({ kind: "stdin" });
           else expect(program.kind === "file" ? `${oracle.provenance.cwd}/${program.path}` : program.kind).toBe(filename);
@@ -76,10 +85,13 @@ describe("the command line, against CPython 3.14", () => {
 });
 
 describe("what the module refuses or ignores, where CPython would do more", () => {
-  it("refuses -m, which CPython would take as a module to run, with CPython's text for an unknown option", () => {
-    for (const args of [["-m", "json.tool"], ["-m"], ["-mjson.tool"], ["-um", "json.tool"]]) {
-      expect(parseCommandLine(args), args.join(" ")).toEqual({ kind: "usage-error", message: "Unknown option: -m" });
+  it("takes -m like -c: the rest of the group or the next argument, ending the options", () => {
+    for (const args of [["-m", "json.tool", "-c", "x"], ["-mjson.tool", "-c", "x"], ["-um", "json.tool", "-c", "x"]]) {
+      expect(parseCommandLine(args), args.join(" ")).toEqual({ kind: "run", program: { kind: "module", module: "json.tool" }, argv: ["-m", "-c", "x"], interactive: false, quiet: false, warnings: [] });
     }
+    expect(parseCommandLine(["-m"])).toEqual({ kind: "usage-error", message: "Argument expected for the -m option" });
+    expect(parseCommandLine(["-ium"])).toEqual({ kind: "usage-error", message: "Argument expected for the -m option" });
+    expect(runOf(parseCommandLine(["-c", "pass", "-m", "x"]))).toMatchObject({ program: { kind: "code", code: "pass" }, argv: ["-c", "-m", "x"] });
   });
 
   it("refuses every other option of CPython's, short or long", () => {
@@ -92,53 +104,53 @@ describe("what the module refuses or ignores, where CPython would do more", () =
     }
   });
 
-  it("accepts -u, -B, -E, -s, -I, -P and -q, alone or grouped, and changes nothing for them", () => {
+  it("accepts -u, -B, -E, -s, -I and -P, alone or grouped, and changes nothing for them", () => {
     const plain = parseCommandLine(["x.py", "a"]);
-    for (const args of [["-u"], ["-B"], ["-E"], ["-s"], ["-I"], ["-P"], ["-q"], ["-uBEsIPq"], ["-u", "-I", "-P"]]) {
+    for (const args of [["-u"], ["-B"], ["-E"], ["-s"], ["-I"], ["-P"], ["-uBEsIP"], ["-u", "-I", "-P"]]) {
       expect(parseCommandLine([...args, "x.py", "a"]), args.join(" ")).toEqual(plain);
     }
-    expect(plain).toEqual({ kind: "run", program: { kind: "file", path: "x.py" }, argv: ["x.py", "a"], interactive: false, warnings: [] });
+    expect(plain).toEqual({ kind: "run", program: { kind: "file", path: "x.py" }, argv: ["x.py", "a"], interactive: false, quiet: false, warnings: [] });
+  });
+
+  it("notes -q, which leaves out the interactive interpreter's banner", () => {
+    expect(runOf(parseCommandLine(["-q", "x.py"]))).toMatchObject({ quiet: true, interactive: false });
+    expect(runOf(parseCommandLine(["-uqi"]))).toMatchObject({ quiet: true, interactive: true, program: { kind: "stdin" } });
   });
 
   it("notes -i, which asks for the interactive interpreter after the program, wherever it appears among the options", () => {
     expect(runOf(parseCommandLine(["-i", "x.py"]))).toMatchObject({ interactive: true, program: { kind: "file", path: "x.py" } });
     expect(runOf(parseCommandLine(["-uic", "pass"]))).toMatchObject({ interactive: true, program: { kind: "code", code: "pass" }, argv: ["-c"] });
     expect(runOf(parseCommandLine(["-i"]))).toMatchObject({ interactive: true, program: { kind: "stdin" }, argv: [""] });
+    expect(runOf(parseCommandLine(["-i", "-m", "json.tool"]))).toMatchObject({ interactive: true, program: { kind: "module", module: "json.tool" } });
   });
 
   it("stops at -c: what follows its argument belongs to the program, even -V, -h and -i", () => {
-    expect(parseCommandLine(["-c", "pass", "-V", "-h", "-i", "-Z"])).toEqual({ kind: "run", program: { kind: "code", code: "pass" }, argv: ["-c", "-V", "-h", "-i", "-Z"], interactive: false, warnings: [] });
+    expect(parseCommandLine(["-c", "pass", "-V", "-h", "-i", "-Z"])).toEqual({ kind: "run", program: { kind: "code", code: "pass" }, argv: ["-c", "-V", "-h", "-i", "-Z"], interactive: false, quiet: false, warnings: [] });
     expect(runOf(parseCommandLine(["-c", "-Z"]))).toMatchObject({ program: { kind: "code", code: "-Z" }, argv: ["-c"] });
   });
 
   it("reads the program from standard input after -- -, and runs a file named - only through a path", () => {
-    expect(parseCommandLine(["--", "-", "a"])).toEqual({ kind: "run", program: { kind: "stdin" }, argv: ["-", "a"], interactive: false, warnings: [] });
+    expect(parseCommandLine(["--", "-", "a"])).toEqual({ kind: "run", program: { kind: "stdin" }, argv: ["-", "a"], interactive: false, quiet: false, warnings: [] });
     expect(runOf(parseCommandLine(["./-", "a"]))).toMatchObject({ program: { kind: "file", path: "./-" }, argv: ["./-", "a"] });
     expect(runOf(parseCommandLine(["--", "--"]))).toMatchObject({ program: { kind: "file", path: "--" }, argv: ["--"] });
   });
 });
 
-describe("the interactive interpreter, which the module does not have yet", () => {
-  const refusal = `${ARGV0}: the interactive interpreter is not supported yet; use FILE, -c CODE or -`;
-
-  it("is refused for a program from a terminal: no arguments, -, or -- with a terminal on standard input", () => {
-    for (const args of [[], ["-"], ["--"], ["-", "a"], ["-u"]]) expect(interactiveRefusal(ARGV0, runOf(parseCommandLine(args)), true), args.join(" ")).toBe(refusal);
+describe("when the interactive interpreter starts without a program", () => {
+  it("starts for a program from a terminal: no arguments, -, or -- with a terminal on standard input", () => {
+    for (const args of [[], ["-"], ["--"], ["-", "a"], ["-u"], ["-q"]]) expect(startsWithPrompt(runOf(parseCommandLine(args)), true), args.join(" ")).toBe(true);
   });
 
-  it("is refused for -i whatever standard input is, because -i asks for it after any program", () => {
-    for (const args of [["-i", "x.py"], ["-i", "-c", "pass"], ["-i"]]) {
-      expect(interactiveRefusal(ARGV0, runOf(parseCommandLine(args)), false), args.join(" ")).toBe(refusal);
-      expect(interactiveRefusal(ARGV0, runOf(parseCommandLine(args)), true), args.join(" ")).toBe(refusal);
+  it("starts for -i without a program whatever standard input is, as CPython prompts on a pipe then", () => {
+    for (const args of [["-i"], ["-i", "-"]]) {
+      expect(startsWithPrompt(runOf(parseCommandLine(args)), false), args.join(" ")).toBe(true);
+      expect(startsWithPrompt(runOf(parseCommandLine(args)), true), args.join(" ")).toBe(true);
     }
   });
 
-  it("is not needed for a file, for -c, or for a program piped in", () => {
-    for (const args of [["x.py"], ["-c", "pass"]]) expect(interactiveRefusal(ARGV0, runOf(parseCommandLine(args)), true), args.join(" ")).toBeUndefined();
-    for (const args of [[], ["-"], ["-", "a"]]) expect(interactiveRefusal(ARGV0, runOf(parseCommandLine(args)), false), args.join(" ")).toBeUndefined();
-  });
-
-  it("names the command as it was typed", () => {
-    expect(interactiveRefusal("/usr/local/bin/python", runOf(parseCommandLine([])), true)).toBe("/usr/local/bin/python: the interactive interpreter is not supported yet; use FILE, -c CODE or -");
+  it("does not start first for a file, -c or -m, nor for a program piped in", () => {
+    for (const args of [["x.py"], ["-c", "pass"], ["-m", "x"], ["-i", "x.py"], ["-i", "-c", "pass"]]) expect(startsWithPrompt(runOf(parseCommandLine(args)), true), args.join(" ")).toBe(false);
+    for (const args of [[], ["-"], ["-", "a"]]) expect(startsWithPrompt(runOf(parseCommandLine(args)), false), args.join(" ")).toBe(false);
   });
 });
 
@@ -150,9 +162,8 @@ describe("the texts", () => {
   it("help starts with the usage line, says what works, and says what does not", () => {
     const help = helpText("python");
     expect(help.split("\n")[0]).toBe("usage: python [option] ... [-c cmd | -m mod | file | -] [arg] ...");
-    for (const option of ["-c cmd", "-h", "-V", "-u", "-B", "-E", "-s", "-I", "-P", "-q", "file", "-  "]) expect(help, option).toContain(option);
-    expect(help).toContain("-m");
-    expect(help).toContain("interactive interpreter");
+    for (const option of ["-c cmd", "-h", "-i", "-m mod", "-q", "-V", "-u", "-B", "-E", "-s", "-I", "-P", "file", "-  "]) expect(help, option).toContain(option);
+    expect(help).toContain("basic REPL");
     expect(help.endsWith("\n")).toBe(true);
   });
 });
