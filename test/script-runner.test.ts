@@ -83,6 +83,13 @@ describe("errors", () => {
     expect(result.stderr).not.toMatch(/:\/\/|\.m?js"|\.ts"|<exec>/u);
   });
 
+  it("drops frames of the blob the adapter runs from in the SDK's module frame (blob:null/...)", async () => {
+    const result = await guest.run('ns = {}\nexec(compile("def relay(f):\\n    return f()\\n", "blob:null/0f0e", "exec"), ns)\n\ndef callback():\n    raise ValueError("through the blob")\n\nns["relay"](callback)\n');
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("blob:");
+    expect(result.stderr).toContain('  File "/workspace/program.py", line 5, in callback');
+  });
+
   it("reports a syntax error with its place, without a traceback of the runner", async () => {
     const result = await guest.run("x = 1\nif True print(x)\n");
     expect(result.status).toBe(1);

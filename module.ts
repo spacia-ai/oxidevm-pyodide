@@ -1,3 +1,4 @@
+import "./src/module-worker-scope.ts";
 import { defineModule } from "@oxidevm/sdk/wasm";
 import { createCommand } from "./src/command.ts";
 

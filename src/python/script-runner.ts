@@ -37,7 +37,9 @@ def _shown(filename):
     """Whether a frame is the program's or a Python module's: not a replacement of a built-in, not JavaScript."""
     if filename == "<exec>":
         return False
-    return not ("://" in filename or filename.startswith("node:") or filename.endswith((".js", ".mjs", ".cjs", ".ts")))
+    # JavaScript frames: a URL, Node's own, a script file, or the blob: the module's adapter runs from (blob:null/... in
+    # the SDK's module frame).
+    return not ("://" in filename or filename.startswith(("node:", "blob:")) or filename.endswith((".js", ".mjs", ".cjs", ".ts")))
 
 
 def _is_runpy(filename):

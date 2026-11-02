@@ -32,6 +32,9 @@ _VERIFY = {
     "invalid-roots": (20, "unable to get local issuer certificate"),
     "certificate-expired": (10, "certificate has expired"),
     "certificate-not-yet-valid": (9, "certificate is not yet valid"),
+    # The engine rejects the certificate itself (a self-signed one, or an authority's used as a server's); OpenSSL's
+    # finer reasons are not known here.
+    "bad-certificate": (1, "unspecified certificate verification error"),
 }
 _ALWAYS_VERIFIES = "This VM's TLS always verifies certificates against /etc/ssl/cert.pem; it cannot be turned off or given other authorities."
 

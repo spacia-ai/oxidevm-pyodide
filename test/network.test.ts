@@ -60,7 +60,7 @@ let guest: GuestFixture;
 let net: FakeNet;
 
 beforeAll(async () => {
-  net = fakeNet({ "example.test": ["93.184.216.34"], "untrusted.test": ["93.184.216.35"], "wrong-name.test": ["93.184.216.35"], "expired.test": ["93.184.216.35"], "both.test": ["2001:db8::7", "93.184.216.34"], localhost: ["127.0.0.1"] }, {
+  net = fakeNet({ "example.test": ["93.184.216.34"], "untrusted.test": ["93.184.216.35"], "wrong-name.test": ["93.184.216.35"], "expired.test": ["93.184.216.35"], "self-signed.test": ["93.184.216.35"], "both.test": ["2001:db8::7", "93.184.216.34"], localhost: ["127.0.0.1"] }, {
     "93.184.216.34:80": httpServer("plain hello"),
     "93.184.216.34:443": tlsServer(httpServer("secure hello")),
     "93.184.216.35:443": tlsServer(httpServer("never served")),
@@ -143,6 +143,13 @@ describe("TLS, through the engine's client", () => {
     const url = recorded("urlopen-tls-expired-trusting");
     expect(await failureOf("urllib.request.urlopen('https://expired.test/', timeout=10)")).toEqual({ type: url.type, str: url.str, errno: url.errno });
     expect(net.open.size).toBe(0);
+  });
+
+  it("refuses a certificate the engine finds unusable (a self-signed one) as a verification failure without OpenSSL's finer reason", async () => {
+    expect(await failureOf("socket_ = socket.create_connection(('self-signed.test', 443)); ssl.create_default_context().wrap_socket(socket_, server_hostname='self-signed.test')")).toEqual({
+      type: "ssl.SSLCertVerificationError", str: "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unspecified certificate verification error (_ssl.c:1081)",
+      errno: 1, reason: "CERTIFICATE_VERIFY_FAILED", library: "SSL", verify_code: 1, verify_message: "unspecified certificate verification error",
+    });
   });
 
   it("verifies even when the program asks it not to, and says so in a note on the error", async () => {

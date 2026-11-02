@@ -60,7 +60,7 @@ export function tlsServer(inner: () => FakeServer): () => FakeServer {
 }
 
 const FAILURES: Readonly<Record<string, ConstructorParameters<typeof TlsError>[0]>> = {
-  "untrusted.test": "unknown-issuer", "wrong-name.test": "name-mismatch", "expired.test": "certificate-expired",
+  "untrusted.test": "unknown-issuer", "wrong-name.test": "name-mismatch", "expired.test": "certificate-expired", "self-signed.test": "bad-certificate",
 };
 
 function isPrivate(address: string): boolean {
