@@ -13,7 +13,7 @@
 // (page console output), --only <text> (run the scenarios whose name contains it), --keep (keep the scratch directory),
 // --no-build (use the existing dist/), --internet (also start a throwaway PKI, HTTPS servers and the relay test peer of
 // test/browser/relay/, and run the internet scenarios through it), --repeat <n> (run the selected scenarios n times, each
-// in a fresh page and VM, and count). The results go to .cache/test-results/pyodide-browser.json, and the server's log
+// in a fresh page and VM, and count), --browser chromium|firefox (default chromium). The results go to .cache/test-results/pyodide-browser.json, and the server's log
 // (every path requested, in order) to pyodide-browser-requests.txt beside it.
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { decodeProjectConfig, getSDKRelease, pinnedEngineCompliance } from "@oxidevm/sdk/image-builder";
-import { chromium } from "playwright-core";
+import { chromium, firefox } from "playwright-core";
 import { build } from "vite";
 import { relayIdentity, startInternet } from "./relay/internet.ts";
 import { startRelayTestPeer } from "./relay/peer.ts";
@@ -197,6 +197,7 @@ export interface Options {
   readonly internet: boolean;
   /** How many times to run the selected scenarios, each time in a fresh page and VM. */
   readonly repeat: number;
+  readonly browser: "chromium" | "firefox";
 }
 
 /** Runs the whole pipeline and returns the scenario results. The scratch directory is removed unless `keep` is set. */
@@ -219,7 +220,10 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
     const image = { manifestUrl: new URL(reference.manifestUrl, served.origin).href, manifestSHA256: reference.manifestSHA256, trust: reference.trust };
     const internet = options.internet ? await startInternet() : undefined;
     const relay = internet === undefined ? undefined : await startRelayTestPeer(await relayIdentity(), internet.routes, internet.dns);
-    const browser = await chromium.launch({ headless: true, args: ["--js-flags=--experimental-wasm-return-call"] });
+    const browser = options.browser === "firefox"
+      // Pyodide needs WebAssembly JSPI, which Firefox ships behind a preference; OXIDEVM_FIREFOX_JSPI=1 turns it on for a
+      // diagnostic run (the module refuses to start without it, status 122, as it should).
+      ? await firefox.launch({ headless: true, ...(process.env["OXIDEVM_FIREFOX_JSPI"] === "1" ? { firefoxUserPrefs: { "javascript.options.wasm_js_promise_integration": true } } : {}) }) : await chromium.launch({ headless: true, args: ["--js-flags=--experimental-wasm-return-call"] });
     try {
       // The relay's own certificate is self-signed for 127.0.0.1: only the browser-to-relay hop accepts it. Python's TLS
       // verifies in the engine against the VM's store and the test root the program loads.
@@ -242,7 +246,7 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
         results.push(...decodeResults(value).map(result => (options.repeat > 1 ? { ...result, name: `[${String(round)}] ${result.name}` } : result)));
         await tab.close();
       }
-      return { results, browser: `chromium ${browser.version()}`, requests: served.requests };
+      return { results, browser: `${options.browser} ${browser.version()}`, requests: served.requests };
     } finally {
       await browser.close();
       await relay?.close();
@@ -255,11 +259,24 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { only: { type: "string" }, keep: { type: "boolean" }, "no-build": { type: "boolean" }, internet: { type: "boolean" }, repeat: { type: "string" } }, strict: true });
+  // Playwright 1.61's Firefox page asserts that it saw the HTTP request of every WebSocket Firefox reports opened. The
+  // relay WebSocket that the runtime's network worker opens has none, and the failed assertion would end the run (the
+  // SDK's wasm-network-experiment.ts sets it aside the same way). Only that assertion is set aside, and it is counted;
+  // anything else still ends the run.
+  let webSocketAssertions = 0;
+  process.on("uncaughtException", (error: Error) => {
+    if (error.message === "Assertion error" && error.stack?.includes("FFPage._onWebSocketOpened") === true) { webSocketAssertions += 1; return; }
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exit(1);
+  });
+  process.on("exit", () => { if (webSocketAssertions > 0) process.stdout.write(`(set aside ${String(webSocketAssertions)} Playwright Firefox WebSocket assertion(s))\n`); });
+  const { values } = parseArgs({ options: { only: { type: "string" }, keep: { type: "boolean" }, "no-build": { type: "boolean" }, internet: { type: "boolean" }, repeat: { type: "string" }, browser: { type: "string" } }, strict: true });
   try {
     const repeat = Number(values.repeat ?? "1");
     if (!Number.isSafeInteger(repeat) || repeat < 1) throw new Error("--repeat takes a whole number of rounds");
-    const { results, browser, requests } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, internet: values.internet === true, repeat, ...(values.only === undefined ? {} : { only: values.only }) });
+    const browserName = values.browser ?? "chromium";
+    if (browserName !== "chromium" && browserName !== "firefox") throw new Error("--browser takes chromium or firefox");
+    const { results, browser, requests } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, internet: values.internet === true, repeat, browser: browserName, ...(values.only === undefined ? {} : { only: values.only }) });
     const failed = results.filter(result => !result.ok).length;
     await mkdir(join(root, ".cache/test-results"), { recursive: true });
     await writeFile(join(root, ".cache/test-results/pyodide-browser.json"), `${JSON.stringify({ browser, results }, null, 2)}\n`);
