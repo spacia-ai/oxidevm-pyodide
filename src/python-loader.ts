@@ -7,6 +7,7 @@ import { ModuleError } from "./errors.ts";
 import { decodeLockfile, importMap, wheelsFor } from "./lock.ts";
 import type { Lockfile } from "./lock.ts";
 import { isWheelFile } from "./shipped.ts";
+import { useAtomicSignalPoll } from "./signals.ts";
 import type { ShippedFile, WheelFile } from "./shipped.ts";
 
 export type PyodideOptions = NonNullable<Parameters<typeof loadPyodide>[0]>;
@@ -44,6 +45,33 @@ export const bundledEngine: Engine = {
     instantiate: (module, imports) => WebAssembly.instantiate(module, imports),
   },
 };
+
+/** Emscripten's `instantiateWasm` hook: it receives the interpreter's imports and instantiates it with them. */
+export type InstantiateHook = (imports: Record<string, unknown>, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => void;
+
+/** What `withPreparedImports` needs of the settings Pyodide gives its Emscripten factory. */
+export interface FactorySettings {
+  readonly instantiateWasm?: InstantiateHook | undefined;
+}
+
+/**
+ * Wraps Pyodide's Emscripten factory so that `prepare` changes the interpreter's imports just before it is instantiated:
+ * the factory's `instantiateWasm` hook, which Pyodide always sets, is wrapped, and `prepare` gets the imports and the
+ * module (the settings object, which Emscripten makes the `Module`). A factory given no hook fails, since nothing could be
+ * prepared; so does a `prepare` that throws.
+ */
+export function withPreparedImports<S extends FactorySettings, M>(factory: (settings: S) => Promise<M>, prepare: (imports: Record<string, unknown>, module: S) => void): (settings: S) => Promise<M> {
+  return settings => {
+    const instantiate = settings.instantiateWasm;
+    if (instantiate === undefined) return Promise.reject(new ModuleError("interpreter-imports", "Pyodide gave no instantiateWasm hook, so the interpreter's imports cannot be prepared"));
+    const hook: InstantiateHook = (imports, done) => {
+      prepare(imports, settings);
+      instantiate(imports, done);
+    };
+    Reflect.set(settings, "instantiateWasm", hook);
+    return factory(settings);
+  };
+}
 
 export interface LoadRequest {
   /** The packages to load before the program starts, with everything they depend on; any other loads when imported. */
@@ -135,7 +163,9 @@ export async function loadPython<P extends PackageLoader>(request: LoadRequest, 
     indexURL: VIRTUAL_INDEX,
     packageBaseUrl: VIRTUAL_INDEX,
     lockFileContents: lockText,
-    createPyodideModule: engine.createPyodideModule,
+    createPyodideModule: withPreparedImports(engine.createPyodideModule, (imports, module) => {
+      useAtomicSignalPoll(imports, module);
+    }),
     env: { ...request.env },
     stdout: () => undefined,
     stderr: line => { request.log(line); },

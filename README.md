@@ -102,8 +102,11 @@ turned on or the module is first started, not again for every run.
   directory the module cannot use. A KeyboardInterrupt that the program does not handle prints its traceback, runs `atexit`
   and ends the process killed by SIGINT, as CPython does: a shell sees 130 and stops a loop.
 - **Ctrl+C** reaches the program as KeyboardInterrupt while it computes, reads standard input or files, sleeps in
-  `time.sleep` (which this module replaces with one that Ctrl+C ends at once), and waits in `oxidevm.run` or a socket of the
-  `oxidevm` module. A Ctrl+C while Pyodide starts, before the program runs, ends the process at once.
+  `time.sleep` (which this module replaces with one that Ctrl+C ends at once), and waits in `oxidevm.run`, a socket of the
+  `oxidevm` module or a `socket` of Python's. A Ctrl+C while Pyodide starts, before the program runs, ends the process at
+  once. The interpreter takes a Ctrl+C out of its interrupt buffer in one atomic step (Pyodide's own poll reads it and then
+  clears it, and loses a Ctrl+C that arrives in between); the module replaces that one import of the interpreter when it
+  instantiates it, and Pyodide's files stay unmodified.
 - **Standard streams** are the process's descriptors 0, 1 and 2, read and written in UTF-8. `isatty()` and
   `os.get_terminal_size()` answer for them as for a native process, with the size the terminal had when the process
   started.

@@ -25,7 +25,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   (`run_sync`) holds a pending Ctrl+C before it settles and resolves with its outcome instead of rejecting (`held` in
   `src/guest.ts`), and Python calls `_oxidevm_bridge.check_interrupt()` right after it, which puts the Ctrl+C back and
   raises KeyboardInterrupt. A new wait of the bridge must do the same. Ctrl+C during the program's own asyncio waits is
-  not handled yet (README.md, Known limits).
+  not handled yet (README.md, Known limits). The interpreter polls the buffer through its import
+  `_Py_CheckEmscriptenSignals_Helper`, which `useAtomicSignalPoll` replaces with an `Atomics.exchange` when the
+  interpreter is instantiated (`withPreparedImports` in `src/python-loader.ts`): never edit Pyodide's files for this.
 - Network (engine ADR 0029): the manifest declares `net.internet` with `sockets.connect` and a purpose, no hosts. Python's
   network goes only through the VM: `kit.emscripten.network` for Pyodide's sockets, `src/net-bridge.ts` for names and TLS
   sessions, and the Python patches in `src/python/` (`socket-patch.ts`, `ssl-patch.ts`, `http-clients-patch.ts`). Never

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { VIRTUAL_INDEX } from "../src/artifact-fetch.ts";
 import type { Fetch } from "../src/artifact-fetch.ts";
 import { ModuleError } from "../src/errors.ts";
-import { loadPython } from "../src/python-loader.ts";
-import type { Engine, LoadRequest, PackageLoader, PyodideOptions, WasmScope } from "../src/python-loader.ts";
+import { loadPython, withPreparedImports } from "../src/python-loader.ts";
+import type { Engine, FactorySettings, LoadRequest, PackageLoader, PyodideOptions, WasmScope } from "../src/python-loader.ts";
 import { WHEELS } from "../src/shipped.ts";
 import type { ShippedFile } from "../src/shipped.ts";
 
@@ -127,13 +127,16 @@ describe("loadPython", () => {
     expect(await failure(loadPython(needing.request, needing.engine))).toBeInstanceOf(ModuleError);
   });
 
-  it("hands Pyodide a virtual index, the lock text and the bundled factory, and the process environment", async () => {
+  it("hands Pyodide a virtual index, the lock text, the bundled factory with the atomic signal poll, and the process environment", async () => {
     const f = fixture(["six"]);
     await loadPython(f.request, f.engine);
     expect(f.options).toHaveLength(1);
     const [given] = f.options;
     expect(given).toMatchObject({ indexURL: VIRTUAL_INDEX, packageBaseUrl: VIRTUAL_INDEX, lockFileContents: LOCK, env: { HOME: "/workspace", FOO: "bar" } });
-    expect(given?.createPyodideModule).toBe(f.engine.createPyodideModule);
+    // The bundled factory, wrapped so that the interpreter's imports are prepared (withPreparedImports, below).
+    const factory = given?.createPyodideModule;
+    expect(factory).toBeTypeOf("function");
+    expect(factory).not.toBe(f.engine.createPyodideModule);
     expect(given?.env).not.toBe(f.request.env);
   });
 
@@ -231,5 +234,55 @@ describe("install, when a program imports a package", () => {
     } }) });
     const loaded = await loadPython(f.request, f.engine);
     expect(Object.fromEntries(loaded.imports)).toEqual({ PIL: "pillow", pylab: "matplotlib", mpl_toolkits: "matplotlib", matplotlib: "matplotlib" });
+  });
+});
+
+describe("withPreparedImports", () => {
+  /** A factory that instantiates nothing: from its async start it calls the hook with `imports`, as Emscripten does. */
+  function fakeFactory(imports: Record<string, unknown>): { readonly factory: (settings: FactorySettings) => Promise<string>; readonly given: FactorySettings[] } {
+    const given: FactorySettings[] = [];
+    return {
+      given,
+      factory: async settings => {
+        given.push(settings);
+        await Promise.resolve();
+        settings.instantiateWasm?.(imports, () => undefined);
+        return "started";
+      },
+    };
+  }
+
+  it("prepares the imports with the module just before Pyodide's own hook instantiates the interpreter", async () => {
+    const events: string[] = [], imports = { env: {} };
+    const { factory, given } = fakeFactory(imports);
+    const settings: FactorySettings = { instantiateWasm: seen => { events.push(seen === imports ? "instantiate the prepared imports" : "instantiate other imports"); } };
+    const started = await withPreparedImports(factory, (seen, module) => { events.push(seen === imports && module === settings ? "prepare" : "prepare other"); })(settings);
+    expect(started).toBe("started");
+    expect(given).toEqual([settings]);
+    expect(events).toEqual(["prepare", "instantiate the prepared imports"]);
+  });
+
+  it("fails when the factory is given no hook, and when preparing fails", async () => {
+    const { factory, given } = fakeFactory({});
+    await expect(withPreparedImports(factory, () => undefined)({})).rejects.toMatchObject({ name: "ModuleError", code: "interpreter-imports" });
+    expect(given).toEqual([]);
+    const failing = withPreparedImports(fakeFactory({}).factory, () => { throw new Error("cannot prepare"); });
+    await expect(failing({ instantiateWasm: () => undefined })).rejects.toThrow("cannot prepare");
+  });
+});
+
+describe("loadPython's imports", () => {
+  it("makes the signal poll atomic, in the factory it hands Pyodide", async () => {
+    const f = fixture([]);
+    await loadPython(f.request, f.engine);
+    const handed = f.options[0]?.createPyodideModule;
+    if (handed === undefined) throw new Error("no factory");
+    const original = (): number => 0, env: Record<string, unknown> = { _Py_CheckEmscriptenSignals_Helper: original };
+    const settings = { instantiateWasm: (imports: Record<string, unknown>) => { f.events.push(imports["env"] === env ? "instantiate" : "instantiate other"); } };
+    // The engine's factory only rejects; calling Pyodide's hook directly shows what was prepared.
+    await expect(Reflect.apply(handed, undefined, [settings])).rejects.toThrow("the factory is only handed over");
+    settings.instantiateWasm({ env });
+    expect(env["_Py_CheckEmscriptenSignals_Helper"]).not.toBe(original);
+    expect(f.events.slice(-1)).toEqual(["instantiate"]);
   });
 });

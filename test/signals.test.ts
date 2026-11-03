@@ -2,10 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Worker } from "node:worker_threads";
 import { LinuxError } from "@oxidevm/sdk/js-process";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PYTHON_VERSION } from "../src/cli.ts";
 import { ModuleError } from "../src/errors.ts";
-import { catchInterrupts, createInterrupts, endBySignal, SLEEP_POLL_MS } from "../src/signals.ts";
+import { catchInterrupts, createInterrupts, endBySignal, SIGNAL_POLL_IMPORT, SLEEP_POLL_MS, takeSignal, useAtomicSignalPoll } from "../src/signals.ts";
 import { normalised, oracle, oracleCase, oracleFiles } from "./support/cpython-oracle.ts";
 import { fakeSignals } from "./support/fake-signals.ts";
 import { startGuest } from "./support/guest-fixture.ts";
@@ -111,6 +111,48 @@ describe("endBySignal", () => {
   });
 });
 
+describe("the interpreter's signal poll", () => {
+  it("takes a pending signal out of the buffer in one exchange, and finds none in anything but an integer array", () => {
+    const buffer = new Int32Array(new SharedArrayBuffer(4));
+    buffer[0] = 2;
+    const exchange = vi.spyOn(Atomics, "exchange");
+    try {
+      expect(takeSignal(buffer)).toBe(2);
+      expect(exchange.mock.calls).toEqual([[buffer, 0, 0]]);
+    } finally { exchange.mockRestore(); }
+    expect(buffer[0]).toBe(0);
+    expect(takeSignal(buffer)).toBe(0);
+    const bytes = Uint8Array.of(2);
+    expect(takeSignal(bytes)).toBe(2);
+    for (const nothing of [undefined, null, 2, [2], new Float64Array([2])]) expect(takeSignal(nothing)).toBe(0);
+  });
+
+  it("replaces the interpreter's poll with one that takes the signal from the buffer Pyodide stores on the module", () => {
+    const original = (): number => 99;
+    const env: Record<string, unknown> = { [SIGNAL_POLL_IMPORT]: original, other: original };
+    const module = {};
+    useAtomicSignalPoll({ env }, module);
+    const replaced: unknown = env[SIGNAL_POLL_IMPORT];
+    expect(replaced).not.toBe(original);
+    expect(env["other"]).toBe(original);
+    if (typeof replaced !== "function") throw new Error("no poll");
+    const poll = (): unknown => Reflect.apply(replaced, undefined, []);
+    expect(poll()).toBe(0);
+    const buffer = new Int32Array(1);
+    Reflect.set(module, "Py_EmscriptenSignalBuffer", buffer);
+    buffer[0] = 2;
+    expect([poll(), buffer[0]]).toEqual([2, 0]);
+  });
+
+  it("refuses an interpreter that does not import the poll", () => {
+    for (const imports of [{}, { env: null }, { env: {} }, { env: { [SIGNAL_POLL_IMPORT]: 1 } }]) {
+      let thrown: unknown;
+      try { useAtomicSignalPoll(imports, {}); } catch (error: unknown) { thrown = error; }
+      expect(thrown instanceof ModuleError ? thrown.code : thrown).toBe("interpreter-imports");
+    }
+  });
+});
+
 describe("Ctrl+C in the program", () => {
   let guest: GuestFixture;
   type Hook = Pick<GuestFixture["stdio"]["files"], "read" | "writeAll">;
@@ -145,6 +187,24 @@ describe("Ctrl+C in the program", () => {
     const module = { executable: "/usr/local/bin/python3", version: PYTHON_VERSION };
     expect(await guest.runCommandLine(recorded.argv.slice(1), { cwd: oracle.provenance.cwd, stdin: recorded.stdin }))
       .toEqual({ status: "SIGINT", stdout: normalised(recorded.stdout, module), stderr: normalised(recorded.stderr, module) });
+  });
+
+  it("polls the buffer with one atomic exchange in the real interpreter, so that a Ctrl+C written meanwhile is kept", () => {
+    // Pyodide's own poll reads the word, then writes 0: a SIGINT the runtime writes between the two is lost.
+    guest.py.setInterruptBuffer(guest.interrupts);
+    guest.interrupts[0] = 2;
+    const exchange = vi.spyOn(Atomics, "exchange");
+    try {
+      expect(() => { guest.py.checkInterrupt(); }).toThrow(/KeyboardInterrupt/u);
+      const polls = exchange.mock.calls.flatMap((call, index) => (Object.is(call[0], guest.interrupts) ? [[...call, exchange.mock.results[index]?.value]] : []));
+      expect(polls[0]).toEqual([guest.interrupts, 0, 0, 2]);
+      expect(polls.every(poll => poll[1] === 0 && poll[2] === 0)).toBe(true);
+    } finally {
+      exchange.mockRestore();
+      // As the fixture leaves Pyodide after a run: watching a buffer nobody writes.
+      guest.py.setInterruptBuffer(new Int32Array(1));
+    }
+    expect(guest.interrupts[0]).toBe(0);
   });
 
   it("raises a Ctrl+C that came before the program started as it starts, so that no line of it runs", async () => {
