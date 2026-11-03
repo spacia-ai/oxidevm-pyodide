@@ -1,5 +1,5 @@
 import type { EmscriptenSockets, NetHost, NetTlsSession } from "./host-types.ts";
-import { extraAuthorities, MAX_EXTRA_AUTHORITIES, storeKeys } from "./trust.ts";
+import { extraAuthorities, MAX_EXTRA_AUTHORITIES, MAX_EXTRA_AUTHORITY_BYTES, storeKeys } from "./trust.ts";
 import { cipherOf, decodeCertificate } from "./x509.ts";
 
 /**
@@ -116,8 +116,9 @@ export function netBridge(host: { readonly net: NetHost }, errnoOf: (error: unkn
       if (!anchors.every((item): item is Uint8Array => item instanceof Uint8Array)) return refused("EINVAL", "trusted authorities must be bytes");
       if (anchors.length > 0) vmKeys ??= storeKeys(vmStore());
       const extra = anchors.length === 0 || vmKeys === undefined ? [] : extraAuthorities(anchors, vmKeys);
-      if (extra.length > MAX_EXTRA_AUTHORITIES) {
-        return refused("ERR_TLS_INVALID_TRUST", `TLS: the program added ${String(extra.length)} authorities that /etc/ssl/cert.pem lacks; a connection takes at most ${String(MAX_EXTRA_AUTHORITIES)}`);
+      const extraBytes = extra.reduce((sum, certificate) => sum + certificate.length, 0);
+      if (extra.length > MAX_EXTRA_AUTHORITIES || extraBytes > MAX_EXTRA_AUTHORITY_BYTES) {
+        return refused("ERR_TLS_INVALID_TRUST", `TLS: the program added ${String(extra.length)} authorities (${String(extraBytes)} bytes) that /etc/ssl/cert.pem lacks; a connection takes at most ${String(MAX_EXTRA_AUTHORITIES)} (${String(MAX_EXTRA_AUTHORITY_BYTES)} bytes)`);
       }
       if (sessions.size >= MAX_TLS_SESSIONS) return refused("EMFILE", `a program may hold ${String(MAX_TLS_SESSIONS)} TLS sessions at once`);
       return attempt(() => {

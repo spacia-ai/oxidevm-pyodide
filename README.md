@@ -204,9 +204,9 @@ may hold 32 sockets open; the module closes any it leaves open when it ends.
 - **Different on purpose, or because the engine does not say:** TLS always verifies: `verify_mode = CERT_NONE` and
   `check_hostname = False` are accepted but change nothing (the error carries a note saying so). An authority the program
   adds is checked when a connection uses it, not when it is loaded, and one the engine cannot use fails that connection
-  with `ssl.SSLError`; `get_ca_certs()` stays empty. The engine adds at most 64 certificates to a connection, so the module
-  passes only those that `/etc/ssl/cert.pem` lacks (a bundle such as certifi's, which requests loads by default, mostly
-  repeats the VM's); more than 64 new ones fail the connection with `ssl.SSLError`. Server-side TLS and client certificates are refused with
+  with `ssl.SSLError`; `get_ca_certs()` stays empty. The module passes a connection only the certificates that
+  `/etc/ssl/cert.pem` lacks (a bundle such as certifi's, which requests loads by default, mostly repeats the VM's); the
+  engine takes at most 512 of them, 2 MiB, per connection, and more fail it with `ssl.SSLError`. Server-side TLS and client certificates are refused with
   `ssl.SSLError`. Only IPv4 addresses are used. A socket timeout bounds reads, not connecting or sending. Pyodide's event
   loop has no sockets, so asyncio streams cannot connect (`ssl.SSLObject` over memory BIOs works).
 - `oxidevm.connect_tcp` and `oxidevm.connect_unix` stay as they were in 0.2.0, with their own timeouts.

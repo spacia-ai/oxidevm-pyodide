@@ -1,13 +1,16 @@
 /**
  * The authorities a program adds with `load_verify_locations`, as the engine's TLS client takes them (engine TLS API 2,
- * `trust`). The engine adds at most `MAX_EXTRA_AUTHORITIES` certificates to a session, counted one by one, so a whole CA
- * bundle such as certifi's (which requests loads for every HTTPS request) cannot be added as it is. Most of such a
- * bundle is already in the VM's own /etc/ssl/cert.pem, which every session trusts anyway, so only the certificates the
- * VM does not have are passed on: the session trusts exactly the same set, the VM's and the program's.
+ * `trust`). Most of a CA bundle such as certifi's (which requests loads for every HTTPS request) is already in the VM's
+ * own /etc/ssl/cert.pem, which every session trusts anyway, so only the certificates the VM does not have are passed on,
+ * one DER certificate per entry: the session trusts exactly the same set, the VM's and the program's, and a connection
+ * carries a few kilobytes of authorities instead of the whole bundle. The engine takes at most `MAX_EXTRA_AUTHORITIES`
+ * certificates and `MAX_EXTRA_AUTHORITY_BYTES` bytes per session.
  */
 
-/** The most certificates the engine adds to one session (its `MAX_EXTRA_ANCHORS`). */
-export const MAX_EXTRA_AUTHORITIES = 64;
+/** The most certificates the engine adds to one session (its `MAX_EXTRA_ANCHORS`, the SDK's `MAX_TRUST_ANCHORS`). */
+export const MAX_EXTRA_AUTHORITIES = 512;
+/** The most bytes of authorities the engine takes for one session (the SDK's `MAX_TRUST_BYTES`). */
+export const MAX_EXTRA_AUTHORITY_BYTES = 2 * 1024 * 1024;
 
 const PEM_BLOCK = /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/gu;
 const PEM_MARK = "-----BEGIN ";

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_RECEIVE_TIMEOUT_MS, netBridge, receiveTimeoutMs } from "../src/net-bridge.ts";
 import { certificatesOf } from "../src/trust.ts";
 import type { EmscriptenSockets } from "../src/host-types.ts";
+import { WHEELS } from "../src/shipped.ts";
 import { fakeNet, httpServer, tlsServer } from "./support/fake-net.ts";
 
 // The parts of the bridge that Python reaches only in edge cases; test/network.test.ts drives the rest from Python.
@@ -75,10 +76,30 @@ describe("the authorities a program adds", () => {
 
   it("refuses more than the engine takes, and bytes that are not bytes", () => {
     const { net } = trusting(undefined);
-    const many = pem(...Array.from({ length: 65 }, (_, index) => `authority ${String(index)}`));
-    expect(net.tlsOpen("a.test", [], [many])).toMatchObject({ ok: false, code: "ERR_TLS_INVALID_TRUST", message: "TLS: the program added 65 authorities that /etc/ssl/cert.pem lacks; a connection takes at most 64" });
+    const many = pem(...Array.from({ length: 513 }, (_, index) => `authority ${String(index)}`));
+    const refusedMany = net.tlsOpen("a.test", [], [many]);
+    expect(refusedMany).toMatchObject({ ok: false, code: "ERR_TLS_INVALID_TRUST" });
+    expect(refusedMany.ok ? "" : refusedMany.message).toContain("the program added 513 authorities");
+    const large = Array.from({ length: 3 }, (_, index) => new Uint8Array(800 * 1024).fill(index + 1));
+    expect(net.tlsOpen("a.test", [], large)).toMatchObject({ ok: false, code: "ERR_TLS_INVALID_TRUST" });
     expect(net.tlsOpen("a.test", [], ["text"])).toMatchObject({ ok: false, code: "EINVAL" });
     // A block that is not base64 stays PEM text, for the engine to refuse.
     expect(certificatesOf(new TextEncoder().encode("-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----\n")).map(entry => new TextDecoder().decode(entry))).toEqual(["-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----"]);
+  });
+});
+
+describe("requests' default authorities", () => {
+  it("loads certifi's whole bundle (120 certificates) without ERR_TLS_INVALID_TRUST, even when the VM's store has none of it", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const certifi = Uint8Array.from(execFileSync("unzip", ["-p", `upstream/${WHEELS.certifi}`, "certifi/cacert.pem"]));
+    const given: number[] = [];
+    const fake = fakeNet({}, {});
+    const tls = (options: Parameters<typeof fake.host.net.tls>[0]): ReturnType<typeof fake.host.net.tls> => { given.push(options.trust?.length ?? 0); return fake.host.net.tls(options); };
+    const empty = netBridge({ net: { ...fake.host.net, tls } }, () => 5, () => undefined);
+    expect(empty.tlsOpen("a.test", [], [certifi])).toMatchObject({ ok: true });
+    const covering = netBridge({ net: { ...fake.host.net, tls } }, () => 5, () => certifi);
+    expect(covering.tlsOpen("a.test", [], [certifi])).toMatchObject({ ok: true });
+    expect(given).toEqual([certificatesOf(certifi).length, 0]);
+    expect(certificatesOf(certifi).length).toBeGreaterThan(64);
   });
 });
