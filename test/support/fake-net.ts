@@ -7,6 +7,13 @@ import type { NetHost, NetTlsSession } from "../../src/host-types.ts";
 // says "HELLO <name>\n", a TLS server answers "WELCOME\n", and from then on bytes pass through unchanged, so that the
 // plaintext servers can stand behind it. The certificate failures the engine reports are raised for chosen names.
 
+/** What a fake TLS server presents once its handshake is done: the chain (DER, leaf first), the version and the suite. */
+export interface FakePeer {
+  readonly certificates: readonly Uint8Array[];
+  readonly version: "TLSv1.2" | "TLSv1.3";
+  readonly suite: number;
+}
+
 /** A server: gets the bytes the client sent so far and answers with bytes to send back (or nothing yet). */
 export type FakeServer = (received: Uint8Array) => { readonly reply?: Uint8Array; readonly close?: boolean };
 
@@ -22,6 +29,12 @@ export interface FakeNet {
   readonly open: Set<number>;
   /** Called when a read would wait for a server that has nothing to send; it may throw (EINTR for a Ctrl+C). */
   onBlockedRead: (() => void) | undefined;
+  /** The timeout of every read that timed out, in milliseconds. */
+  readonly readTimeouts: number[];
+  /** What every TLS server presents after its handshake. */
+  peer: FakePeer;
+  /** For every TLS session, how many authorities the program added to the VM's. */
+  readonly trusted: number[];
 }
 
 const encoder = new TextEncoder(), decoder = new TextDecoder();
@@ -63,15 +76,18 @@ const FAILURES: Readonly<Record<string, ConstructorParameters<typeof TlsError>[0
   "untrusted.test": "unknown-issuer", "wrong-name.test": "name-mismatch", "expired.test": "certificate-expired", "self-signed.test": "bad-certificate",
 };
 
+/** What a trusted authority that vouches for private.test contains (as PEM text, or as the bytes of a DER certificate). */
+export const PRIVATE_AUTHORITY = "PRIVATE TEST CA";
+
 function isPrivate(address: string): boolean {
   return address.startsWith("127.") || address.startsWith("10.") || address === "::1";
 }
 
-export function fakeNet(names: Readonly<Record<string, readonly string[]>>, servers: Readonly<Record<string, () => FakeServer>>): FakeNet {
+export function fakeNet(names: Readonly<Record<string, readonly string[]>>, servers: Readonly<Record<string, () => FakeServer>>, peer: FakePeer = { certificates: [], version: "TLSv1.3", suite: 0x1301 }): FakeNet {
   const connections: string[] = [], sessionNames: string[] = [], open = new Set<number>();
   let nextSession = 1;
   const state: FakeNet = {
-    connections, sessions: sessionNames, open, connected: true, onBlockedRead: undefined,
+    connections, sessions: sessionNames, open, connected: true, onBlockedRead: undefined, readTimeouts: [], peer, trusted: [],
     host: {
       net: {
         resolve: () => Promise.reject(new Error("the fake network is synchronous")),
@@ -99,10 +115,17 @@ export function fakeNet(names: Readonly<Record<string, readonly string[]>>, serv
               if (answer.reply !== undefined) { pending = concat(pending, answer.reply); received = new Uint8Array(); }
               if (answer.close === true) closed = true;
             },
-            read: max => {
+            read: (max, options) => {
               if (pending.length === 0) {
                 if (closed) return new Uint8Array();
                 state.onBlockedRead?.();
+                // As the kit's timed read reports a receive timeout: ETIMEDOUT with Linux's EAGAIN.
+                if (options?.timeoutMs !== undefined) {
+                  state.readTimeouts.push(options.timeoutMs);
+                  // The kit's read waits that long before it gives up; so does this one, without busy waiting.
+                  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, options.timeoutMs);
+                  throw new NetError("ETIMEDOUT", `read ${key}: no bytes arrived within ${String(options.timeoutMs)} ms`, { errno: 11 });
+                }
                 throw new NetError("ETIMEDOUT", `read ${key}: the fake server has nothing to send`);
               }
               const chunk = pending.slice(0, max);
@@ -114,6 +137,9 @@ export function fakeNet(names: Readonly<Record<string, readonly string[]>>, serv
           };
         },
         tls: options => {
+          const anchors = (options.trust ?? []).map(entry => decoder.decode(entry));
+          if (anchors.some(anchor => anchor.includes("NOT A CA"))) throw new NetError("ERR_TLS_INVALID_TRUST", "TLS: a trust entry holds no usable CA certificate", { syscall: "tls" });
+          state.trusted.push(anchors.length);
           sessionNames.push(options.serverName);
           const id = nextSession++;
           open.add(id);
@@ -121,7 +147,8 @@ export function fakeNet(names: Readonly<Record<string, readonly string[]>>, serv
           return {
             receive: bytes => {
               if (status === "handshaking") {
-                const failure = FAILURES[options.serverName];
+                // private.test's certificate comes from an authority the VM does not know; a program may add it.
+                const failure = options.serverName === "private.test" && !anchors.some(anchor => anchor.includes(PRIVATE_AUTHORITY)) ? "unknown-issuer" : FAILURES[options.serverName];
                 if (failure !== undefined) { status = "failed"; throw new TlsError(failure, options.serverName); }
                 const text = decoder.decode(bytes);
                 if (!text.startsWith("WELCOME\n")) { status = "failed"; throw new TlsError("protocol", options.serverName); }
@@ -136,6 +163,9 @@ export function fakeNet(names: Readonly<Record<string, readonly string[]>>, serv
             takePlaintext: max => { const chunk = plaintext.slice(0, max); plaintext = plaintext.slice(max); return chunk; },
             state: () => status,
             alpn: () => (status === "established" ? options.alpn?.[0] ?? null : null),
+            peerCertificates: () => (status === "handshaking" || status === "failed" ? [] : [...state.peer.certificates]),
+            protocolVersion: () => (status === "handshaking" || status === "failed" ? null : state.peer.version),
+            cipherSuite: () => (status === "handshaking" || status === "failed" ? null : state.peer.suite),
             close: () => { status = "closed"; },
             free: () => { open.delete(id); },
           };

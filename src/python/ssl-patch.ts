@@ -11,13 +11,21 @@
  *   <message> (_ssl.c:1081)";
  * - a peer that closes without close_notify is `ssl.SSLEOFError`, which `suppress_ragged_eofs` turns into b"";
  * - `wrap_bio` objects raise `ssl.SSLWantReadError` until the peer's bytes arrive.
- * What differs, on purpose or because the engine's session does not say (README.md, Known limits): TLS always verifies
- * against the VM's /etc/ssl/cert.pem, whatever `verify_mode`, `check_hostname` or `load_verify_locations` ask (a CA file
- * adds no trust); `getpeercert()` is `{}` (None with `binary_form`), `version()` and `cipher()` are None; server-side TLS
- * and client certificates are refused with `ssl.SSLError`.
+ * - after the handshake, `getpeercert()` is the server's certificate decoded as CPython decodes it (src/x509.ts), `{}`
+ *   when the context's `verify_mode` is CERT_NONE, and its DER with `binary_form`; before it, ValueError "handshake not
+ *   done yet"; `version()` is "TLSv1.3" or "TLSv1.2" and `cipher()` (OpenSSL's name, the version, the secret bits), both
+ *   None before the handshake (engine TLS API 2: `peerCertificates`, `protocolVersion`, `cipherSuite`).
+ * - `load_verify_locations` (so `create_default_context(cafile=...)`, urllib3's and requests' `verify=<file>`) adds the
+ *   authorities of a PEM file, a directory of PEM files, or `cadata` to the VM's for that context's sessions (engine TLS
+ *   API 2, `trust`), failing as CPython does for a file or data without a certificate.
+ * What differs, on purpose (README.md, Known limits): TLS always verifies, against the VM's /etc/ssl/cert.pem and the
+ * authorities the program loaded, whatever `verify_mode` or `check_hostname` ask; server-side TLS and client
+ * certificates are refused with `ssl.SSLError`.
  */
 export const SSL_PATCH_SOURCE = `import builtins as _builtins
 import errno as _errno
+import json as _json
+import os as _os
 import socket as _socket
 import ssl as _ssl
 
@@ -36,7 +44,8 @@ _VERIFY = {
     # finer reasons are not known here.
     "bad-certificate": (1, "unspecified certificate verification error"),
 }
-_ALWAYS_VERIFIES = "This VM's TLS always verifies certificates against /etc/ssl/cert.pem; it cannot be turned off or given other authorities."
+_ALWAYS_VERIFIES = "This VM's TLS always verifies certificates, against /etc/ssl/cert.pem and the authorities the program loads (load_verify_locations); it cannot be turned off."
+_PEM_CERTIFICATE = b"-----BEGIN CERTIFICATE-----"
 
 
 def _ssl_error(outcome, hostname):
@@ -56,6 +65,15 @@ def _ssl_error(outcome, hostname):
     return error
 
 
+def _tuples(value):
+    """CPython's getpeercert() shape: every list of the decoded certificate is a tuple."""
+    if isinstance(value, dict):
+        return {key: _tuples(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return tuple(_tuples(item) for item in value)
+    return value
+
+
 def _eof():
     return _ssl.SSLEOFError(_ssl.SSL_ERROR_EOF, "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol " + _WHERE)
 
@@ -63,9 +81,9 @@ def _eof():
 class _Session:
     """One TLS client session of the engine, with the plaintext received and not yet read."""
 
-    def __init__(self, hostname, alpn):
+    def __init__(self, hostname, alpn, trust):
         self.hostname = hostname
-        self.handle = self._value(_bridge.tls_open(hostname, _to_js(list(alpn))))
+        self.handle = self._value(_bridge.tls_open(hostname, _to_js(list(alpn)), _to_js(list(trust))))
         self.plain = bytearray()
 
     def _value(self, outcome):
@@ -108,21 +126,42 @@ class _Session:
     def selected_alpn_protocol(self):
         return self.status()[1]
 
-    def getpeercert(self, binary_form=False):
-        return None if binary_form else {}
+    def peer(self):
+        return _json.loads(str(self._value(_bridge.tls_peer(self.handle))))
+
+    def getpeercert(self, binary_form=False, verified=True):
+        """CPython's getpeercert(): verified is False when the context's verify_mode is CERT_NONE."""
+        if self.peer()["version"] is None:
+            raise ValueError("handshake not done yet")
+        der = self._value(_bridge.tls_peer_certificate(self.handle)).to_bytes()
+        if not der:
+            return None
+        if binary_form:
+            return der
+        if not verified:
+            return {}
+        outcome = _bridge.decode_certificate(_to_js(der))
+        if not outcome.ok:
+            raise _ssl.SSLError(1, "[SSL] the server's certificate cannot be decoded: " + str(outcome.message) + " " + _WHERE)
+        return _tuples(_json.loads(str(outcome.value)))
 
     def pending(self):
         self.drain()
         return _builtins.len(self.plain)
 
     def version(self):
-        return None
+        return self.peer()["version"]
 
     def cipher(self):
-        return None
+        cipher = self.peer()["cipher"]
+        return None if cipher is None else tuple(cipher)
 
     def compression(self):
         return None
+
+
+def _trust_of(context):
+    return list(getattr(context, "_oxidevm_trust", []))
 
 
 def _alpn_of(context):
@@ -199,7 +238,7 @@ def do_handshake(self, block=False):
     _check_client(self._context, self._server_side)
     if not self._server_hostname:
         raise ValueError("this VM's TLS needs server_hostname to verify the server")
-    session = _Session(self._server_hostname, _alpn_of(self._context))
+    session = _Session(self._server_hostname, _alpn_of(self._context), _trust_of(self._context))
     try:
         while True:
             _flush(self, session)
@@ -297,9 +336,20 @@ def selected_alpn_protocol(self):
 
 
 def getpeercert(self, binary_form=False):
-    if getattr(self, "_oxidevm_session", None) is None:
+    session = getattr(self, "_oxidevm_session", None)
+    if session is None:
         raise ValueError("handshake not done yet")
-    return None if binary_form else {}
+    return session.getpeercert(binary_form, self._context.verify_mode != _ssl.CERT_NONE)
+
+
+def version(self):
+    session = getattr(self, "_oxidevm_session", None)
+    return None if session is None else session.version()
+
+
+def cipher(self):
+    session = getattr(self, "_oxidevm_session", None)
+    return None if session is None else session.cipher()
 
 
 def _release(self):
@@ -339,7 +389,7 @@ def connect(self, addr):
         raise ValueError("can't connect in server-side mode")
     if self._connected or getattr(self, "_oxidevm_session", None) is not None:
         raise ValueError("attempt to connect already-connected SSLSocket!")
-    _csocket.socket.connect(self, addr)
+    _socket.socket.connect(self, addr)
     self._connected = True
     if self._do_handshake_on_connect:
         self.do_handshake()
@@ -356,7 +406,7 @@ def connect_ex(self, addr):
 for _name, _value in {
     "_create": _create, "do_handshake": do_handshake, "read": read, "write": write, "recv": recv, "recv_into": recv_into,
     "send": send, "sendall": sendall, "pending": pending, "selected_alpn_protocol": selected_alpn_protocol,
-    "getpeercert": getpeercert, "unwrap": unwrap, "shutdown": shutdown, "_real_close": _real_close, "connect": connect,
+    "getpeercert": getpeercert, "version": version, "cipher": cipher, "unwrap": unwrap, "shutdown": shutdown, "_real_close": _real_close, "connect": connect,
     "connect_ex": connect_ex,
 }.items():
     setattr(_ssl.SSLSocket, _name, _value)
@@ -387,7 +437,7 @@ def _object_create(cls, incoming, outgoing, server_side=False, server_hostname=N
     self = object.__new__(cls)
     hostname = context._encode_hostname(server_hostname)
     self.__dict__.update({"_incoming": incoming, "_outgoing": outgoing, "_context": context, "_hostname": hostname, "_session_object": session, "_established": False})
-    self._oxidevm_session = _Session(hostname, _alpn_of(context))
+    self._oxidevm_session = _Session(hostname, _alpn_of(context), _trust_of(context))
     return self
 
 
@@ -449,7 +499,9 @@ for _name, _value in {
     "_create": _object_create, "do_handshake": _object_do_handshake, "read": _object_read, "write": _object_write,
     "pending": _object_pending, "unwrap": _object_unwrap,
     "selected_alpn_protocol": lambda self: self._oxidevm_session.status()[1],
-    "getpeercert": lambda self, binary_form=False: None if binary_form else {},
+    "getpeercert": lambda self, binary_form=False: self._oxidevm_session.getpeercert(binary_form, self._context.verify_mode != _ssl.CERT_NONE),
+    "version": lambda self: self._oxidevm_session.version(),
+    "cipher": lambda self: self._oxidevm_session.cipher(),
     "context": property(lambda self: self._context),
     "server_hostname": property(lambda self: self._hostname),
     "server_side": property(lambda self: False),
@@ -460,6 +512,56 @@ for _name, _value in {
 
 def wrap_bio(self, incoming, outgoing, server_side=False, server_hostname=None, session=None):
     return self.sslobject_class._create(incoming, outgoing, server_side=server_side, server_hostname=server_hostname, session=session, context=self)
+
+
+def _read_authorities(path):
+    try:
+        with open(path, "rb") as file:
+            return file.read()
+    except OSError as error:
+        # As CPython reports it: the errno and its text, without the file's name.
+        raise type(error)(error.errno, error.strerror) from None
+
+
+def load_verify_locations(self, cafile=None, capath=None, cadata=None):
+    """Adds authorities to the VM's /etc/ssl/cert.pem for this context's sessions (engine TLS API 2, trust)."""
+    if cafile is None and capath is None and cadata is None:
+        raise TypeError("cafile, capath and cadata cannot be all omitted")
+    entries = []
+    if cadata is not None:
+        if isinstance(cadata, str):
+            try:
+                data = cadata.encode("ascii")
+            except UnicodeEncodeError:
+                raise TypeError("cadata should be an ASCII string or a bytes-like object") from None
+            if _PEM_CERTIFICATE not in data:
+                raise _ssl.SSLError(0, "no start line: cadata does not contain a certificate (_ssl.c:4279)")
+        else:
+            try:
+                data = bytes(memoryview(cadata))
+            except TypeError:
+                raise TypeError("cadata should be an ASCII string or a bytes-like object") from None
+            if not data.startswith(b"\\x30"):
+                raise _ssl.SSLError(0, "not enough data: cadata does not contain a certificate (_ssl.c:4279)")
+        entries.append(data)
+    if cafile is not None:
+        data = _read_authorities(_os.fspath(cafile))
+        if _PEM_CERTIFICATE not in data:
+            error = _ssl.SSLError(136, "[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found (_ssl.c:4413)")
+            error.reason, error.library = "NO_CERTIFICATE_OR_CRL_FOUND", "X509"
+            raise error
+        entries.append(data)
+    if capath is not None:
+        # OpenSSL looks certificates up there by hash when it needs one; this reads them all, in name order.
+        directory = _os.fspath(capath)
+        names = sorted(_os.listdir(directory)) if _os.path.isdir(directory) else []
+        for name in names:
+            path = _os.path.join(directory, name)
+            if _os.path.isfile(path):
+                data = _read_authorities(path)
+                if _PEM_CERTIFICATE in data:
+                    entries.append(data)
+    self._oxidevm_trust = _trust_of(self) + entries
 
 
 def set_alpn_protocols(self, alpn_protocols):
@@ -477,6 +579,7 @@ for _error in (_ssl.SSLError, _ssl.SSLZeroReturnError, _ssl.SSLWantReadError, _s
 
 _ssl.SSLContext.wrap_bio = wrap_bio
 _ssl.SSLContext.set_alpn_protocols = set_alpn_protocols
+_ssl.SSLContext.load_verify_locations = load_verify_locations
 _ssl.HAS_TLSv1_3 = True
 # The engine checks the server's name against the certificate's subject alternative names only, never its common name,
 # so libraries (urllib3) leave the check to it instead of matching names themselves from getpeercert().

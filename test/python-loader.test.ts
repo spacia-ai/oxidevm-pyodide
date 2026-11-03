@@ -56,7 +56,7 @@ function fixture(packages: readonly string[], overrides: Overrides = {}): Fixtur
     instantiate: module => { events.push(module === COMPILED ? "instantiate the compiled interpreter" : "instantiate another module"); return Promise.resolve(new WebAssembly.Instance(COMPILED)); },
   };
   const request: LoadRequest = {
-    packages, env: { HOME: "/workspace", FOO: "bar" }, log: line => { logs.push(line); },
+    packages, env: { HOME: "/workspace", FOO: "bar" }, log: line => { logs.push(line); }, networkImports: () => { events.push("networkImports"); },
     compile: name => { compiled.push(name); events.push(`compile ${name}`); return Promise.resolve(COMPILED); },
     bytes: overrides.bytes ?? ((name: ShippedFile) => { asked.push(name); events.push(`bytes ${name}`); return Promise.resolve(name === "pyodide-lock.json" ? new TextEncoder().encode(overrides.lock ?? LOCK) : new TextEncoder().encode(`content of ${name}`)); }),
   };
@@ -272,7 +272,7 @@ describe("withPreparedImports", () => {
 });
 
 describe("loadPython's imports", () => {
-  it("makes the signal poll atomic, in the factory it hands Pyodide", async () => {
+  it("makes the signal poll atomic and prepares the network's imports, in the factory it hands Pyodide", async () => {
     const f = fixture([]);
     await loadPython(f.request, f.engine);
     const handed = f.options[0]?.createPyodideModule;
@@ -283,6 +283,6 @@ describe("loadPython's imports", () => {
     await expect(Reflect.apply(handed, undefined, [settings])).rejects.toThrow("the factory is only handed over");
     settings.instantiateWasm({ env });
     expect(env["_Py_CheckEmscriptenSignals_Helper"]).not.toBe(original);
-    expect(f.events.slice(-1)).toEqual(["instantiate"]);
+    expect(f.events.slice(-2)).toEqual(["networkImports", "instantiate"]);
   });
 });

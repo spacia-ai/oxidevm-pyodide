@@ -31,7 +31,10 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
 - Network (engine ADR 0029): the manifest declares `net.internet` with `sockets.connect` and a purpose, no hosts. Python's
   network goes only through the VM: `kit.emscripten.network` for Pyodide's sockets, `src/net-bridge.ts` for names and TLS
   sessions, and the Python patches in `src/python/` (`socket-patch.ts`, `ssl-patch.ts`, `http-clients-patch.ts`). Never
-  use the browser's `fetch`, XHR or WebSocket for Python, and never add a way to turn TLS verification off. A network
+  use the browser's `fetch`, XHR or WebSocket for Python, and never add a way to turn TLS verification off (a program may
+  add authorities with `load_verify_locations`, never remove the VM's). The interpreter's imports go through
+  `kit.emscripten.networkImports` before it is instantiated, and Python's socket timeouts become receive timeouts
+  (`receive_timeout`). `getpeercert()` is decoded by `src/x509.ts` and compared with CPython's own decoding. A network
   failure fails as CPython 3.14 does (`test/fixtures/cpython-net.json`, recorded by `python3.14 -I
   scripts/record-cpython-net.py`); a Python program decides its own exit, so the module never exits 69 for it.
 - A program started as a command cannot import the JavaScript bridge (`src/python/hide-bridge.ts`); application starts can.

@@ -5,8 +5,8 @@ import { NetError } from "@oxidevm/sdk/wasm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isRecord } from "../src/records.ts";
 import { WHEELS } from "../src/shipped.ts";
-import { fakeNet, httpServer, tlsServer } from "./support/fake-net.ts";
-import type { FakeNet } from "./support/fake-net.ts";
+import { fakeNet, httpServer, PRIVATE_AUTHORITY, tlsServer } from "./support/fake-net.ts";
+import type { FakeNet, FakePeer } from "./support/fake-net.ts";
 import { startGuest } from "./support/guest-fixture.ts";
 import type { GuestFixture } from "./support/guest-fixture.ts";
 
@@ -49,6 +49,25 @@ except Exception as error:
 `;
 }
 
+/** A certificate CPython decoded: its DER, and the repr of the dict its getpeercert() returned for it. */
+function recordedCertificate(name: string): { readonly der: Uint8Array; readonly decoded: string } {
+  const certificates = isRecord(recording) ? recording["certificates"] : undefined;
+  const entry = isRecord(certificates) ? certificates[name] : undefined;
+  if (!isRecord(entry) || typeof entry["der"] !== "string" || typeof entry["decoded"] !== "string") throw new Error(`cpython-net.json has no certificate ${name}`);
+  return { der: Uint8Array.from(Buffer.from(entry["der"], "base64")), decoded: entry["decoded"] };
+}
+
+/** What CPython's version() and cipher() returned for a connection (`peer` in the recording). */
+function recordedPeer(name: string): { readonly version: string; readonly cipher: readonly unknown[] } {
+  const peers = isRecord(recording) ? recording["peer"] : undefined;
+  const entry = isRecord(peers) ? peers[name] : undefined;
+  if (!isRecord(entry) || typeof entry["version"] !== "string" || !Array.isArray(entry["cipher"])) throw new Error(`cpython-net.json has no peer ${name}`);
+  return { version: entry["version"], cipher: Array.from<unknown>(entry["cipher"]) };
+}
+
+const RICH = recordedCertificate("rich"), AUTHORITY = recordedCertificate("rich-ca");
+const RICH_PEER: FakePeer = { certificates: [RICH.der, AUTHORITY.der], version: "TLSv1.3", suite: 0x1302 };
+
 async function failureOf(action: string): Promise<unknown> {
   const result = await guest.run(describing(action));
   expect(result.status, result.stderr).toBe(0);
@@ -60,13 +79,15 @@ let guest: GuestFixture;
 let net: FakeNet;
 
 beforeAll(async () => {
-  net = fakeNet({ "example.test": ["93.184.216.34"], "untrusted.test": ["93.184.216.35"], "wrong-name.test": ["93.184.216.35"], "expired.test": ["93.184.216.35"], "self-signed.test": ["93.184.216.35"], "both.test": ["2001:db8::7", "93.184.216.34"], localhost: ["127.0.0.1"] }, {
+  net = fakeNet({ "example.test": ["93.184.216.34"], "untrusted.test": ["93.184.216.35"], "wrong-name.test": ["93.184.216.35"], "expired.test": ["93.184.216.35"], "self-signed.test": ["93.184.216.35"], "both.test": ["2001:db8::7", "93.184.216.34"], "quiet.test": ["93.184.216.36"], "private.test": ["93.184.216.37"], localhost: ["127.0.0.1"] }, {
     "93.184.216.34:80": httpServer("plain hello"),
     "93.184.216.34:443": tlsServer(httpServer("secure hello")),
     "93.184.216.35:443": tlsServer(httpServer("never served")),
     "127.0.0.1:8000": httpServer("from the VM"),
     "93.184.216.34:7": () => () => ({}),
-  });
+    "93.184.216.36:443": tlsServer(() => () => ({})),
+    "93.184.216.37:443": tlsServer(httpServer("private hello")),
+  }, RICH_PEER);
   guest = await startGuest(undefined, { net: net.host });
   // The HTTP libraries, unpacked as the module's import hook unpacks them (src/python-loader.ts loads them in the browser).
   const sitePackages: unknown = guest.py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
@@ -77,7 +98,7 @@ beforeAll(async () => {
   guest.py.runPython("import importlib\nimportlib.invalidate_caches()");
 }, 120_000);
 
-afterEach(() => { net.connected = true; net.onBlockedRead = undefined; });
+afterEach(() => { net.connected = true; net.onBlockedRead = undefined; net.peer = RICH_PEER; net.readTimeouts.length = 0; net.trusted.length = 0; });
 
 afterAll(async () => {
   await guest.stop();
@@ -129,8 +150,8 @@ describe("connections, through the VM's sockets", () => {
 
 describe("TLS, through the engine's client", () => {
   it("fetches over HTTPS with urllib and http.client, with ALPN, and frees every session", async () => {
-    const result = await guest.run("import http.client, ssl, urllib.request\nprint(urllib.request.urlopen('https://example.test/secure').read())\ncontext = ssl.create_default_context()\ncontext.set_alpn_protocols(['http/1.1'])\nconnection = http.client.HTTPSConnection('example.test', context=context)\nconnection.request('GET', '/again')\nprint(connection.sock.selected_alpn_protocol(), connection.sock.getpeercert(), connection.sock.getpeercert(True))\nresponse = connection.getresponse()\nprint(response.status, response.read())\nconnection.close()\n");
-    expect(result).toEqual({ status: 0, stdout: "b'secure hello'\nhttp/1.1 {} None\n200 b'secure hello'\n", stderr: "" });
+    const result = await guest.run("import http.client, ssl, urllib.request\nprint(urllib.request.urlopen('https://example.test/secure').read())\ncontext = ssl.create_default_context()\ncontext.set_alpn_protocols(['http/1.1'])\nconnection = http.client.HTTPSConnection('example.test', context=context)\nconnection.request('GET', '/again')\nprint(connection.sock.selected_alpn_protocol(), connection.sock.getpeercert()['subject'][5], len(connection.sock.getpeercert(True)))\nresponse = connection.getresponse()\nprint(response.status, response.read())\nconnection.close()\n");
+    expect(result).toEqual({ status: 0, stdout: `b'secure hello'\nhttp/1.1 (('commonName', 'rich.example'),) ${String(RICH.der.length)}\n200 b'secure hello'\n`, stderr: "" });
     expect(net.open.size).toBe(0);
   });
 
@@ -154,7 +175,7 @@ describe("TLS, through the engine's client", () => {
 
   it("verifies even when the program asks it not to, and says so in a note on the error", async () => {
     const result = await guest.run("import socket, ssl\ncontext = ssl._create_unverified_context()\ntry:\n    context.wrap_socket(socket.create_connection(('untrusted.test', 443)), server_hostname='untrusted.test')\nexcept ssl.SSLCertVerificationError as error:\n    print(error.verify_code, error.__notes__)\nprint(context.wrap_socket(socket.create_connection(('example.test', 443)), server_hostname='example.test').getpeercert())\n");
-    expect(result).toEqual({ status: 0, stdout: "20 [\"This VM's TLS always verifies certificates against /etc/ssl/cert.pem; it cannot be turned off or given other authorities.\"]\n{}\n", stderr: "" });
+    expect(result).toEqual({ status: 0, stdout: "20 [\"This VM's TLS always verifies certificates, against /etc/ssl/cert.pem and the authorities the program loads (load_verify_locations); it cannot be turned off.\"]\n{}\n", stderr: "" });
   });
 
   it("refuses server-side TLS and client certificates with ssl.SSLError, and needs the server's name", async () => {
@@ -170,6 +191,120 @@ describe("TLS, through the engine's client", () => {
   it("reads a whole response through makefile and treats a close without close_notify as the end", async () => {
     const result = await guest.run("import socket, ssl\nwith ssl.create_default_context().wrap_socket(socket.create_connection(('example.test', 443)), server_hostname='example.test') as secured:\n    secured.sendall(b'GET / HTTP/1.1\\r\\nHost: example.test\\r\\n\\r\\n')\n    data = secured.makefile('rb').read()\n    print(data.split(b'\\r\\n\\r\\n')[1], secured.recv(10))\n");
     expect(result).toEqual({ status: 0, stdout: "b'secure hello' b''\n", stderr: "" });
+  });
+});
+
+describe("what the server presented (engine TLS API 2)", () => {
+  const connect = "secured = ssl.create_default_context().wrap_socket(socket.create_connection(('example.test', 443)), server_hostname='example.test')\n";
+
+  it("shows the server's certificate exactly as CPython 3.14 decodes it, and its DER with binary_form", async () => {
+    for (const [certificate, peer] of [[RICH, RICH_PEER], [AUTHORITY, { ...RICH_PEER, certificates: [AUTHORITY.der] }]] as const) {
+      net.peer = peer;
+      const result = await guest.run(`import socket, ssl\n${connect}print(repr(secured.getpeercert()))\nprint(secured.getpeercert(binary_form=True).hex())\n`);
+      expect(result).toEqual({ status: 0, stdout: `${certificate.decoded}\n${Buffer.from(certificate.der).toString("hex")}\n`, stderr: "" });
+    }
+  });
+
+  it("reports the protocol version and the cipher as CPython does, over TLS 1.3 and TLS 1.2", async () => {
+    for (const [name, version, suite] of [["tls13", "TLSv1.3", 0x1302], ["tls12-aes128", "TLSv1.2", 0xc02b], ["tls12-aes256", "TLSv1.2", 0xc02c], ["tls12-chacha20", "TLSv1.2", 0xcca9]] as const) {
+      net.peer = { ...RICH_PEER, version, suite };
+      const recordedOne = recordedPeer(name);
+      const result = await guest.run(`import json, socket, ssl\n${connect}print(json.dumps([secured.version(), list(secured.cipher())]))\n`);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual([recordedOne.version, recordedOne.cipher]);
+    }
+  });
+
+  it("is empty for a context that does not ask for verification, as in CPython, and None without a certificate", async () => {
+    const unverified = await guest.run("import socket, ssl\ncontext = ssl._create_unverified_context()\nsecured = context.wrap_socket(socket.create_connection(('example.test', 443)), server_hostname='example.test')\nprint(secured.getpeercert(), len(secured.getpeercert(True)))\n");
+    expect(unverified).toEqual({ status: 0, stdout: `{} ${String(RICH.der.length)}\n`, stderr: "" });
+    net.peer = { ...RICH_PEER, certificates: [] };
+    expect(await guest.run(`import socket, ssl\n${connect}print(secured.getpeercert(), secured.getpeercert(True))\n`)).toEqual({ status: 0, stdout: "None None\n", stderr: "" });
+  });
+
+  it("raises ValueError for the certificate, and has no version or cipher, before the handshake (memory BIOs too)", async () => {
+    const result = await guest.run("import ssl\nobj = ssl.create_default_context().wrap_bio(ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname='example.test')\ntry:\n    obj.getpeercert()\nexcept ValueError as error:\n    print(error)\nprint(obj.version(), obj.cipher())\nobj._incoming.write(b'WELCOME\\n')\nobj.do_handshake()\nprint(obj.version(), obj.cipher(), obj.getpeercert()['notAfter'])\n");
+    expect(result).toEqual({ status: 0, stdout: "handshake not done yet\nNone None\nTLSv1.3 ('TLS_AES_256_GCM_SHA384', 'TLSv1.3', 256) Jun 15 12:00:00 2051 GMT\n", stderr: "" });
+  });
+});
+
+describe("authorities a program adds (load_verify_locations, engine TLS API 2 trust)", () => {
+  const PEM = `-----BEGIN CERTIFICATE-----\\n${PRIVATE_AUTHORITY}\\n-----END CERTIFICATE-----\\n`;
+
+  it("trusts a CA file, a directory of them, or cadata, for that context only, and so do urllib, requests and httpx", async () => {
+    const result = await guest.run(`import os, socket, ssl, urllib.request, requests, httpx
+open('/workspace/ca.pem', 'w').write(${JSON.stringify(PEM)})
+os.makedirs('/workspace/certs', exist_ok=True)
+open('/workspace/certs/ca.pem', 'w').write(${JSON.stringify(PEM)})
+open('/workspace/certs/readme.txt', 'w').write('not a certificate')
+for context in (ssl.create_default_context(cafile='/workspace/ca.pem'), ssl.create_default_context(capath='/workspace/certs'), ssl.create_default_context(cadata=${JSON.stringify(PEM)}), ssl.create_default_context(cadata=b'0' + ${JSON.stringify(PRIVATE_AUTHORITY)}.encode())):
+    secured = context.wrap_socket(socket.create_connection(('private.test', 443)), server_hostname='private.test')
+    print(secured.version(), end=' ')
+    secured.close()
+print()
+try:
+    ssl.create_default_context().wrap_socket(socket.create_connection(('private.test', 443)), server_hostname='private.test')
+except ssl.SSLCertVerificationError as error:
+    print('default context', error.verify_code)
+print(urllib.request.urlopen('https://private.test/', context=ssl.create_default_context(cafile='/workspace/ca.pem')).read())
+print(requests.get('https://private.test/', verify='/workspace/ca.pem', timeout=10).text)
+print(httpx.get('https://private.test/', verify=ssl.create_default_context(cafile='/workspace/ca.pem')).text)
+`);
+    expect(result).toEqual({ status: 0, stdout: "TLSv1.3 TLSv1.3 TLSv1.3 TLSv1.3 \ndefault context 20\nb'private hello'\nprivate hello\nprivate hello\n", stderr: "" });
+    // A directory adds only its certificate files; a context without authorities adds none.
+    expect(net.trusted.slice(0, 5)).toEqual([1, 1, 1, 1, 0]);
+  });
+
+  it("fails as CPython 3.14 does for a file or data without a certificate, and for nothing at all", async () => {
+    await guest.run("open('/workspace/empty.pem', 'w').close()\n");
+    for (const [call, name] of [["ssl.create_default_context().load_verify_locations(cafile='/workspace/empty.pem')", "cafile-empty"], ["ssl.create_default_context().load_verify_locations(cadata='hello')", "cadata-text-without-certificate"],
+      ["ssl.create_default_context().load_verify_locations(cadata=b'hello')", "cadata-bytes-without-certificate"], ["ssl.create_default_context().load_verify_locations()", "load-verify-locations-nothing"],
+      ["ssl.create_default_context().load_verify_locations(cadata=5)", "cadata-wrong-type"]] as const) {
+      expect(await failureOf(call), call).toEqual(recorded(name));
+    }
+    // Pyodide numbers ENOENT as Emscripten does (44), so the number differs from Linux's 2; the type and the text do not.
+    const missing = recorded("cafile-missing");
+    expect(await failureOf("ssl.create_default_context().load_verify_locations(cafile='/workspace/missing.pem')")).toEqual({ ...missing, str: missing.str.replace("[Errno 2]", "[Errno 44]"), errno: 44 });
+  });
+
+  it("reports an authority the engine cannot use as ssl.SSLError when the session opens", async () => {
+    const result = await guest.run("import socket, ssl\ncontext = ssl.create_default_context(cadata='-----BEGIN CERTIFICATE-----\\nNOT A CA\\n-----END CERTIFICATE-----\\n')\ntry:\n    context.wrap_socket(socket.create_connection(('private.test', 443)), server_hostname='private.test')\nexcept ssl.SSLError as error:\n    print(type(error).__name__, error)\n");
+    expect(result).toEqual({ status: 0, stdout: "SSLError [SSL: ERR_TLS_INVALID_TRUST] TLS: a trust entry holds no usable CA certificate (_ssl.c:1081)\n", stderr: "" });
+  });
+});
+
+describe("socket timeouts, as receive timeouts of the VM's connections", () => {
+  it("raises TimeoutError('timed out') as CPython does when a recv waits longer than settimeout", async () => {
+    expect(await failureOf("connection = socket.create_connection(('example.test', 7), timeout=10); connection.settimeout(0.2); connection.recv(10)")).toEqual(recorded("recv-timeout"));
+    expect(await failureOf("socket.create_connection(('example.test', 7), timeout=0.2).recv(10)")).toEqual(recorded("create-connection-recv-timeout"));
+    expect(net.readTimeouts).toEqual([200, 200]);
+  });
+
+  it("raises BlockingIOError (EAGAIN) on a non-blocking socket, and blocks again with settimeout(None)", async () => {
+    const recordedOne = recorded("recv-nonblocking");
+    const result = await guest.run("import errno, socket\nconnection = socket.create_connection(('example.test', 7))\nconnection.setblocking(False)\ntry:\n    connection.recv(10)\nexcept BlockingIOError as error:\n    print(error.errno == errno.EAGAIN, error.strerror)\nconnection.settimeout(None)\ntry:\n    connection.recv(10)\nexcept OSError as error:\n    print(type(error).__name__, error.errno == errno.ETIMEDOUT)\n");
+    expect(result).toEqual({ status: 0, stdout: `True ${recordedOne.str.replace(/^\[Errno \d+\] /u, "")}\nTimeoutError True\n`, stderr: "" });
+    // The second read had no timeout: the fake's own blocked read failed it, not a receive timeout.
+    expect(net.readTimeouts).toEqual([1]);
+  });
+
+  it("takes socket.setdefaulttimeout, rounds up to whole milliseconds, and bounds TLS reads too", async () => {
+    const result = await guest.run("import socket, ssl\nsocket.setdefaulttimeout(0.3005)\ntry:\n    socket.create_connection(('example.test', 7)).recv(10)\nexcept TimeoutError as error:\n    print('plain', error)\nfinally:\n    socket.setdefaulttimeout(None)\nsecured = ssl.create_default_context().wrap_socket(socket.create_connection(('quiet.test', 443)), server_hostname='quiet.test')\nsecured.settimeout(0.25)\ntry:\n    secured.recv(10)\nexcept TimeoutError as error:\n    print('tls', error)\n");
+    expect(result).toEqual({ status: 0, stdout: "plain timed out\ntls timed out\n", stderr: "" });
+    expect(net.readTimeouts).toEqual([301, 250]);
+  });
+});
+
+describe("names below Python's socket module", () => {
+  it("resolves a name given to socket.connect through the VM, failing as CPython does", async () => {
+    expect(await failureOf("socket.socket().connect(('nonexistent.invalid', 80))")).toEqual(recorded("socket-connect-unresolvable"));
+    const result = await guest.run("import socket\nconnection = socket.socket()\nprint(connection.connect_ex(('localhost', 8000)))\nconnection.sendall(b'GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')\nprint(connection.recv(4096).split(b'\\r\\n\\r\\n')[1])\n");
+    expect(result).toEqual({ status: 0, stdout: "0\nb'from the VM'\n", stderr: "" });
+  });
+
+  it("makes the C library's getaddrinfo fail for a name the VM cannot resolve (kit.emscripten.networkImports)", async () => {
+    const result = await guest.run("import _socket\nfor name in ('nonexistent.invalid', 'slow.test'):\n    try:\n        print(_socket.getaddrinfo(name, 80))\n    except _socket.gaierror as error:\n        print(error.errno)\nprint(_socket.getaddrinfo('example.test', 80, 0, _socket.SOCK_STREAM)[0][4])\n");
+    expect(result).toEqual({ status: 0, stdout: "-2\n-3\n('93.184.216.34', 80)\n", stderr: "" });
   });
 });
 

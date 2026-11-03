@@ -72,11 +72,12 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       const info = await host.process.info();
       const python = await loadPython({
         packages: host.options.packages, bytes: name => host.artifacts.bytes(name), compile: name => host.artifacts.compile(name),
-        env: pythonEnvironment(io.env), log: text => { host.log(text); },
+        env: pythonEnvironment(io.env), log: text => { host.log(text); }, networkImports: imports => { host.kit.emscripten.networkImports(imports); },
       }, engine);
       const { py } = python;
       // Python's sockets and Emscripten's own name lookups go to the VM's network (engine ADR 0029, N-4).
-      host.kit.emscripten.network(host, Reflect.get(py, "_module"));
+      // Python's socket timeouts become the receive timeouts of those sockets (src/python/socket-patch.ts).
+      net.attachSockets(host.kit.emscripten.network(host, Reflect.get(py, "_module")));
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
       const interrupts = createInterrupts();

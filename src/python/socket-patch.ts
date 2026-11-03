@@ -8,7 +8,15 @@
  * not connected to the internet, a lookup fails with PermissionError (EPERM), as a connection does. Only IPv4 addresses
  * are returned: Pyodide's sockets and its getaddrinfo take IPv4 only. Numeric addresses
  * and `None` go to Pyodide's own functions unchanged, and the resolved addresses are turned into results by them too,
- * so the tuples are exactly what CPython returns for those addresses.
+ * so the tuples are exactly what CPython returns for those addresses. `socket.connect` and `connect_ex` resolve a name
+ * the same way before they connect. Below Python, `kit.emscripten.networkImports` makes the C library's own
+ * `getaddrinfo` fail with EAI_NONAME or EAI_AGAIN for a name the VM cannot resolve (src/python-loader.ts), so code that
+ * reaches it directly (`_socket.getaddrinfo`, C extensions) gets `socket.gaierror` too, with musl's wording.
+ *
+ * Timeouts: a socket's timeout (`settimeout`, `setblocking`, `socket.setdefaulttimeout`, `create_connection(timeout=)`)
+ * becomes its receive timeout in `kit.emscripten.network` (`_oxidevm_bridge.receive_timeout`), so a `recv` that waits
+ * longer raises `TimeoutError('timed out')` as in CPython, and one on a non-blocking socket raises `BlockingIOError`.
+ * Connecting and sending do not time out: the VM's connection is open, or refused, before Python gets it back.
  */
 export const SOCKET_PATCH_SOURCE = `import errno as _errno
 import os as _os
@@ -101,4 +109,65 @@ for _function in (getaddrinfo, gethostbyname, gethostbyname_ex):
     _function.__qualname__ = _function.__name__
     _function.__doc__ = getattr(_socket, _function.__name__).__doc__
     setattr(_socket, _function.__name__, _function)
+
+
+_original_init = _socket.socket.__init__
+_original_settimeout = _socket.socket.settimeout
+_original_setblocking = _socket.socket.setblocking
+_original_connect = _socket.socket.connect
+_original_connect_ex = _socket.socket.connect_ex
+
+
+def _apply_timeout(sock):
+    """Gives the socket's timeout to the VM connection as its receive timeout (None blocks)."""
+    fd = sock.fileno()
+    if fd >= 0:
+        _bridge.receive_timeout(fd, sock.gettimeout())
+
+
+def _connect_address(sock, address):
+    """An IPv4 (host, port) whose host is a name, with the name resolved through the VM as getaddrinfo resolves it."""
+    if sock.family != _socket.AF_INET or not isinstance(address, tuple) or len(address) != 2:
+        return address
+    host, port = address
+    if not isinstance(host, (str, bytes, bytearray)) or not host:
+        return address
+    name = _text(host)
+    if _numeric(name) or name == "<broadcast>":
+        return address
+    addresses = _ipv4(_resolve(name))
+    if not addresses:
+        raise _socket.gaierror(*_NONAME)
+    return (addresses[0], port)
+
+
+def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+    _original_init(self, family, type, proto, fileno)
+    if self.gettimeout() is not None:
+        _apply_timeout(self)
+
+
+def settimeout(self, value):
+    _original_settimeout(self, value)
+    _apply_timeout(self)
+
+
+def setblocking(self, flag):
+    _original_setblocking(self, flag)
+    _apply_timeout(self)
+
+
+def connect(self, address):
+    return _original_connect(self, _connect_address(self, address))
+
+
+def connect_ex(self, address):
+    return _original_connect_ex(self, _connect_address(self, address))
+
+
+for _method in (__init__, settimeout, setblocking, connect, connect_ex):
+    _method.__module__ = "socket"
+    _method.__qualname__ = "socket." + _method.__name__
+    _method.__doc__ = getattr(_socket.socket, _method.__name__).__doc__
+    setattr(_socket.socket, _method.__name__, _method)
 `;

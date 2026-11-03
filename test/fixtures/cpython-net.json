@@ -4,7 +4,7 @@
     "interpreter": "/usr/bin/python3.14",
     "version": "3.14.4",
     "openssl": "OpenSSL 3.5.5 27 Jan 2026",
-    "recorded": "2026-11-02",
+    "recorded": "2026-11-03",
     "recorder": "scripts/record-cpython-net.py",
     "command": "python3.14 -I scripts/record-cpython-net.py",
     "unresolvable": "nonexistent.invalid"
@@ -60,6 +60,114 @@
           "str": "[Errno -2] Name or service not known",
           "errno": -2
         }
+      }
+    },
+    "socket-connect-unresolvable": {
+      "error": {
+        "type": "socket.gaierror",
+        "args": [
+          "-2",
+          "'Name or service not known'"
+        ],
+        "str": "[Errno -2] Name or service not known",
+        "errno": -2
+      }
+    },
+    "recv-timeout": {
+      "error": {
+        "type": "builtins.TimeoutError",
+        "args": [
+          "'timed out'"
+        ],
+        "str": "timed out",
+        "errno": null
+      }
+    },
+    "create-connection-recv-timeout": {
+      "error": {
+        "type": "builtins.TimeoutError",
+        "args": [
+          "'timed out'"
+        ],
+        "str": "timed out",
+        "errno": null
+      }
+    },
+    "recv-nonblocking": {
+      "error": {
+        "type": "builtins.BlockingIOError",
+        "args": [
+          "11",
+          "'Resource temporarily unavailable'"
+        ],
+        "str": "[Errno 11] Resource temporarily unavailable",
+        "errno": 11
+      }
+    },
+    "cafile-empty": {
+      "error": {
+        "type": "ssl.SSLError",
+        "args": [
+          "136",
+          "'[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found (_ssl.c:4413)'"
+        ],
+        "str": "[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found (_ssl.c:4413)",
+        "errno": 136,
+        "reason": "NO_CERTIFICATE_OR_CRL_FOUND",
+        "library": "X509"
+      }
+    },
+    "cafile-missing": {
+      "error": {
+        "type": "builtins.FileNotFoundError",
+        "args": [
+          "2",
+          "'No such file or directory'"
+        ],
+        "str": "[Errno 2] No such file or directory",
+        "errno": 2
+      }
+    },
+    "cadata-text-without-certificate": {
+      "error": {
+        "type": "ssl.SSLError",
+        "args": [
+          "0",
+          "'no start line: cadata does not contain a certificate (_ssl.c:4279)'"
+        ],
+        "str": "no start line: cadata does not contain a certificate (_ssl.c:4279)",
+        "errno": 0
+      }
+    },
+    "cadata-bytes-without-certificate": {
+      "error": {
+        "type": "ssl.SSLError",
+        "args": [
+          "0",
+          "'not enough data: cadata does not contain a certificate (_ssl.c:4279)'"
+        ],
+        "str": "not enough data: cadata does not contain a certificate (_ssl.c:4279)",
+        "errno": 0
+      }
+    },
+    "load-verify-locations-nothing": {
+      "error": {
+        "type": "builtins.TypeError",
+        "args": [
+          "'cafile, capath and cadata cannot be all omitted'"
+        ],
+        "str": "cafile, capath and cadata cannot be all omitted",
+        "errno": null
+      }
+    },
+    "cadata-wrong-type": {
+      "error": {
+        "type": "builtins.TypeError",
+        "args": [
+          "'cadata should be an ASCII string or a bytes-like object'"
+        ],
+        "str": "cadata should be an ASCII string or a bytes-like object",
+        "errno": null
       }
     },
     "create-connection-refused": {
@@ -271,6 +379,52 @@
           "verify_message": "certificate has expired"
         }
       }
+    }
+  },
+  "peer": {
+    "tls13": {
+      "version": "TLSv1.3",
+      "cipher": [
+        "TLS_AES_256_GCM_SHA384",
+        "TLSv1.3",
+        256
+      ]
+    },
+    "tls12-aes128": {
+      "version": "TLSv1.2",
+      "cipher": [
+        "ECDHE-ECDSA-AES128-GCM-SHA256",
+        "TLSv1.2",
+        128
+      ]
+    },
+    "tls12-aes256": {
+      "version": "TLSv1.2",
+      "cipher": [
+        "ECDHE-ECDSA-AES256-GCM-SHA384",
+        "TLSv1.2",
+        256
+      ]
+    },
+    "tls12-chacha20": {
+      "version": "TLSv1.2",
+      "cipher": [
+        "ECDHE-ECDSA-CHACHA20-POLY1305",
+        "TLSv1.2",
+        256
+      ]
+    }
+  },
+  "certificates": {
+    "rich": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIDyjCCA3GgAwIBAgIKAIDx4tPEtaaXiDAKBggqhkjOPQQDAjBEMQswCQYDVQQG\nEwJOTDEcMBoGA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVj\nb3JkaW5nIFJvb3QwIBcNMjYwMTAxMDkzNDA1WhgPMjA1MTA2MTUxMjAwMDBaMIG5\nMQswCQYDVQQGEwJOTDEWMBQGA1UECAwNTm9vcmQtSG9sbGFuZDESMBAGA1UEBwwJ\nQW1zdGVyZGFtMRwwGgYDVQQKDBNaYcW8w7PFgsSHIEfEmcWbbMSFMSYwEAYDVQQL\nDAlSZWNvcmRpbmcwEgYDVQQLDAtTZWNvbmQgVW5pdDEVMBMGA1UEAwwMcmljaC5l\neGFtcGxlMSEwHwYJKoZIhvcNAQkBFhJjZXJ0c0ByaWNoLmV4YW1wbGUwWTATBgcq\nhkjOPQIBBggqhkjOPQMBBwNCAATxijfXaJy40+s274/G01lq+zDXk7wdHOnXWg8m\nJU9/zj2waYw2LpnUysjg74lcOU10L2bhMpRtsNaTwtfFDPWEo4IB0TCCAc0wgccG\nA1UdEQSBvzCBvIIMcmljaC5leGFtcGxlgg4qLnJpY2guZXhhbXBsZYcEwAACB4cQ\nIAENuAAAAAAAAAAAAAAAAYESY2VydHNAcmljaC5leGFtcGxlhhlodHRwczovL3Jp\nY2guZXhhbXBsZS9wYXRoiAMqAwSgDgYDKgMFoAcMBW90aGVypEAwPjELMAkGA1UE\nBhMCTkwxFjAUBgNVBAoMDURpcmVjdG9yeSBPcmcxFzAVBgNVBAMMDkRpcmVjdG9y\neSBOYW1lMGAGCCsGAQUFBwEBBFQwUjAlBggrBgEFBQcwAYYZaHR0cDovL29jc3Au\ncmljaC5leGFtcGxlLzApBggrBgEFBQcwAoYdaHR0cDovL2NhLnJpY2guZXhhbXBs\nZS9jYS5kZXIwLwYDVR0fBCgwJjAkoCKgIIYeaHR0cDovL2NybC5yaWNoLmV4YW1w\nbGUvY2EuY3JsMAkGA1UdEwQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMB0GA1UdDgQWBBTwGoKoDGqzUWwikSf5qe06QtxMMTAfBgNVHSME\nGDAWgBT7DYRdZqCnp3v+KbX3QVodjAC3eTAKBggqhkjOPQQDAgNHADBEAiAV4rxY\n9Bfk8eP/4uR1Mc3ysZsPGSKO2AtxufsrTOHuhAIgQ6p7Cb858ZWSFzkXpgbEbVOD\ntFOokpMVuQsO6imEXbE=\n-----END CERTIFICATE-----\n",
+      "der": "MIIDyjCCA3GgAwIBAgIKAIDx4tPEtaaXiDAKBggqhkjOPQQDAjBEMQswCQYDVQQGEwJOTDEcMBoGA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVjb3JkaW5nIFJvb3QwIBcNMjYwMTAxMDkzNDA1WhgPMjA1MTA2MTUxMjAwMDBaMIG5MQswCQYDVQQGEwJOTDEWMBQGA1UECAwNTm9vcmQtSG9sbGFuZDESMBAGA1UEBwwJQW1zdGVyZGFtMRwwGgYDVQQKDBNaYcW8w7PFgsSHIEfEmcWbbMSFMSYwEAYDVQQLDAlSZWNvcmRpbmcwEgYDVQQLDAtTZWNvbmQgVW5pdDEVMBMGA1UEAwwMcmljaC5leGFtcGxlMSEwHwYJKoZIhvcNAQkBFhJjZXJ0c0ByaWNoLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATxijfXaJy40+s274/G01lq+zDXk7wdHOnXWg8mJU9/zj2waYw2LpnUysjg74lcOU10L2bhMpRtsNaTwtfFDPWEo4IB0TCCAc0wgccGA1UdEQSBvzCBvIIMcmljaC5leGFtcGxlgg4qLnJpY2guZXhhbXBsZYcEwAACB4cQIAENuAAAAAAAAAAAAAAAAYESY2VydHNAcmljaC5leGFtcGxlhhlodHRwczovL3JpY2guZXhhbXBsZS9wYXRoiAMqAwSgDgYDKgMFoAcMBW90aGVypEAwPjELMAkGA1UEBhMCTkwxFjAUBgNVBAoMDURpcmVjdG9yeSBPcmcxFzAVBgNVBAMMDkRpcmVjdG9yeSBOYW1lMGAGCCsGAQUFBwEBBFQwUjAlBggrBgEFBQcwAYYZaHR0cDovL29jc3AucmljaC5leGFtcGxlLzApBggrBgEFBQcwAoYdaHR0cDovL2NhLnJpY2guZXhhbXBsZS9jYS5kZXIwLwYDVR0fBCgwJjAkoCKgIIYeaHR0cDovL2NybC5yaWNoLmV4YW1wbGUvY2EuY3JsMAkGA1UdEwQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBTwGoKoDGqzUWwikSf5qe06QtxMMTAfBgNVHSMEGDAWgBT7DYRdZqCnp3v+KbX3QVodjAC3eTAKBggqhkjOPQQDAgNHADBEAiAV4rxY9Bfk8eP/4uR1Mc3ysZsPGSKO2AtxufsrTOHuhAIgQ6p7Cb858ZWSFzkXpgbEbVODtFOokpMVuQsO6imEXbE=",
+      "decoded": "{'subject': ((('countryName', 'NL'),), (('stateOrProvinceName', 'Noord-Holland'),), (('localityName', 'Amsterdam'),), (('organizationName', 'Zażółć Gęślą'),), (('organizationalUnitName', 'Recording'), ('organizationalUnitName', 'Second Unit')), (('commonName', 'rich.example'),), (('emailAddress', 'certs@rich.example'),)), 'issuer': ((('countryName', 'NL'),), (('organizationName', 'Recording Authority'),), (('commonName', 'Recording Root'),)), 'version': 3, 'serialNumber': '80F1E2D3C4B5A69788', 'notBefore': 'Jan  1 09:34:05 2026 GMT', 'notAfter': 'Jun 15 12:00:00 2051 GMT', 'subjectAltName': (('DNS', 'rich.example'), ('DNS', '*.rich.example'), ('IP Address', '192.0.2.7'), ('IP Address', '2001:DB8:0:0:0:0:0:1'), ('email', 'certs@rich.example'), ('URI', 'https://rich.example/path'), ('Registered ID', '1.2.3.4'), ('othername', '<unsupported>'), ('DirName', ((('countryName', 'NL'),), (('organizationName', 'Directory Org'),), (('commonName', 'Directory Name'),)))), 'OCSP': ('http://ocsp.rich.example/',), 'caIssuers': ('http://ca.rich.example/ca.der',), 'crlDistributionPoints': ('http://crl.rich.example/ca.crl',)}"
+    },
+    "rich-ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIB2jCCAYCgAwIBAgIBATAKBggqhkjOPQQDAjBEMQswCQYDVQQGEwJOTDEcMBoG\nA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVjb3JkaW5nIFJv\nb3QwHhcNMjYxMTAzMDc0MDIyWhcNMzYxMDMxMDc0MDIyWjBEMQswCQYDVQQGEwJO\nTDEcMBoGA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVjb3Jk\naW5nIFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATcwyi7Eiqf/KivY+XV\nc5oDkSDGEBajNYQOeChZMXm8MWEKRrAljuG0nuilvpOYSkNsM8ggBZehIrNXPW6N\nUW/6o2MwYTAdBgNVHQ4EFgQU+w2EXWagp6d7/im190FaHYwAt3kwHwYDVR0jBBgw\nFoAU+w2EXWagp6d7/im190FaHYwAt3kwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8B\nAf8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIhAJ9ip+MOMeS7bJOfTrQNLwio3oht\nDXS3e9M02/aLe2ufAiAl0xxlAq30LJd/e09VCujqTFadHwuJR0vnRxtE2jXg/w==\n-----END CERTIFICATE-----\n",
+      "der": "MIIB2jCCAYCgAwIBAgIBATAKBggqhkjOPQQDAjBEMQswCQYDVQQGEwJOTDEcMBoGA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVjb3JkaW5nIFJvb3QwHhcNMjYxMTAzMDc0MDIyWhcNMzYxMDMxMDc0MDIyWjBEMQswCQYDVQQGEwJOTDEcMBoGA1UECgwTUmVjb3JkaW5nIEF1dGhvcml0eTEXMBUGA1UEAwwOUmVjb3JkaW5nIFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATcwyi7Eiqf/KivY+XVc5oDkSDGEBajNYQOeChZMXm8MWEKRrAljuG0nuilvpOYSkNsM8ggBZehIrNXPW6NUW/6o2MwYTAdBgNVHQ4EFgQU+w2EXWagp6d7/im190FaHYwAt3kwHwYDVR0jBBgwFoAU+w2EXWagp6d7/im190FaHYwAt3kwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIhAJ9ip+MOMeS7bJOfTrQNLwio3ohtDXS3e9M02/aLe2ufAiAl0xxlAq30LJd/e09VCujqTFadHwuJR0vnRxtE2jXg/w==",
+      "decoded": "{'subject': ((('countryName', 'NL'),), (('organizationName', 'Recording Authority'),), (('commonName', 'Recording Root'),)), 'issuer': ((('countryName', 'NL'),), (('organizationName', 'Recording Authority'),), (('commonName', 'Recording Root'),)), 'version': 3, 'serialNumber': '01', 'notBefore': 'Nov  3 07:40:22 2026 GMT', 'notAfter': 'Oct 31 07:40:22 2036 GMT'}"
     }
   }
 }

@@ -110,10 +110,10 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
   const interrupts = createInterrupts();
   const net = extras.net === undefined ? undefined : netBridge(extras.net, error => kit.net.errno(error));
   const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets, interrupts, ...(packages === undefined ? {} : { packages }), ...(net === undefined ? {} : { net }) };
-  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }));
+  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }), extras.net === undefined ? undefined : imports => { kit.emscripten.networkImports(imports); });
   for (const tree of [WORKSPACE, TMP]) mountTree(py.FS, files.files, kit.errno, tree);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
-  if (extras.net !== undefined) kit.emscripten.network(extras.net, Reflect.get(py, "_module"));
+  if (extras.net !== undefined) net?.attachSockets(kit.emscripten.network(extras.net, Reflect.get(py, "_module")));
   installGuest(py, IDENTITY, bridges);
   const trap = await catchInterrupts(fakeSignals().signals, interrupts);
 

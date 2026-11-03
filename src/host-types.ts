@@ -16,6 +16,8 @@ export type NetHost = Host<"net.internet">["net"];
 export type NetTlsSession = ReturnType<NetHost["tls"]>;
 /** A file descriptor of this process. */
 export type FileDescriptor = ReturnType<SyncFiles["open"]>;
+/** Pyodide's sockets once `kit.emscripten.network` connected them to the VM: their receive timeouts. */
+export type EmscriptenSockets = ReturnType<Host["kit"]["emscripten"]["network"]>;
 /** The errno helpers of `host.kit`. */
 export type KitErrno = Host["kit"]["errno"];
 /** This process's signals (`process.signals`). */

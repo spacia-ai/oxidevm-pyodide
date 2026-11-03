@@ -84,6 +84,11 @@ export interface LoadRequest {
   readonly env: Readonly<Record<string, string>>;
   /** Receives anything Pyodide reports as an error while it loads. */
   readonly log: (line: string) => void;
+  /**
+   * Prepares the interpreter's imports for the VM's network before it is instantiated (`kit.emscripten.networkImports`):
+   * its getaddrinfo then fails for a name the VM cannot resolve, instead of answering with the unspecified address.
+   */
+  readonly networkImports: (imports: object) => void;
 }
 
 /** A started Pyodide, with what loads packages into it later. */
@@ -165,6 +170,7 @@ export async function loadPython<P extends PackageLoader>(request: LoadRequest, 
     lockFileContents: lockText,
     createPyodideModule: withPreparedImports(engine.createPyodideModule, (imports, module) => {
       useAtomicSignalPoll(imports, module);
+      request.networkImports(imports);
     }),
     env: { ...request.env },
     stdout: () => undefined,

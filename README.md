@@ -173,7 +173,8 @@ may hold 32 sockets open; the module closes any it leaves open when it ends.
 - **How.** Python's `socket` is Pyodide's Emscripten socket layer connected to the module process's own VM sockets
   (`kit.emscripten.network`), and names resolve through the VM's resolver (`/etc/hosts`, then the nameservers of
   `/etc/resolv.conf`). `ssl` runs the engine's TLS client over those sockets and verifies every certificate against the
-  VM's `/etc/ssl/cert.pem`, what `curl` in the image trusts. `socket`, `ssl`, `http.client`, `urllib.request` and the
+  VM's `/etc/ssl/cert.pem`, what `curl` in the image trusts, and the authorities the program adds with
+  `load_verify_locations` (`create_default_context(cafile=...)`, requests' `verify=<file>`). `socket`, `ssl`, `http.client`, `urllib.request` and the
   shipped `requests` (with `urllib3`) and `httpx` are tested this way; other standard modules (`smtplib`, `imaplib`) use the
   same `socket` and `ssl`. urllib3 and httpx are kept on these sockets instead of the browser's `fetch`, which does not
   exist in a module. The browser's own network is never used.
@@ -183,17 +184,29 @@ may hold 32 sockets open; the module closes any it leaves open when it ends.
 - **Offline.** Before the VM is connected, or after the user revoked it, Python fails as CPython does when the system refuses
   a connection: `PermissionError` (EPERM) from `connect` and from name lookups, which urllib reports as
   `URLError(PermissionError(...))` and requests as `ConnectionError`; a revoke resets open connections. The program decides what to do and which status to exit with; the module adds nothing.
-- **Failures as in CPython 3.14** (recorded from it, `scripts/record-cpython-net.py`): a name that does not exist is
-  `socket.gaierror(-2, 'Name or service not known')`, a nameserver that does not answer `socket.gaierror(-3, 'Temporary
-  failure in name resolution')`, a refused port `ConnectionRefusedError`, and a certificate the VM does not trust
-  `ssl.SSLCertVerificationError` with OpenSSL's `verify_code` and `verify_message` (20 unknown issuer, 62 wrong name,
-  10 expired, 9 not yet valid). Error numbers are Pyodide's (`errno.ECONNREFUSED`), as everywhere in Pyodide.
-- **Different on purpose, or because the engine does not say:** TLS always verifies: `verify_mode = CERT_NONE`,
-  `check_hostname = False` and `load_verify_locations` are accepted but change nothing (a CA file adds no trust; the error
-  carries a note saying so). `getpeercert()` returns `{}` (None with `binary_form=True`); `version()` and `cipher()` are
-  None. Server-side TLS and client certificates are refused with `ssl.SSLError`. Only IPv4 addresses are used. A socket
-  timeout limits the connection attempt, not a read that waits for the server: a silent server keeps `recv` waiting until
-  Ctrl+C. Pyodide's event loop has no sockets, so asyncio streams cannot connect (`ssl.SSLObject` over memory BIOs works).
+- **As in CPython 3.14** (recorded from it, `scripts/record-cpython-net.py`):
+  - a name that does not exist is `socket.gaierror(-2, 'Name or service not known')`, from `getaddrinfo`,
+    `gethostbyname` and `connect` alike, and a nameserver that does not answer `socket.gaierror(-3, 'Temporary failure in
+    name resolution')`; code that calls the C library's `getaddrinfo` itself (`_socket.getaddrinfo`, C extensions) gets the
+    same numbers with musl's wording (`kit.emscripten.networkImports`);
+  - a refused port is `ConnectionRefusedError`;
+  - a socket timeout (`settimeout`, `socket.setdefaulttimeout`, `create_connection(timeout=)`) bounds every read:
+    `recv` raises `TimeoutError('timed out')` when nothing arrives in time, and `BlockingIOError` (EAGAIN) on a
+    non-blocking socket;
+  - a certificate that is not trusted is `ssl.SSLCertVerificationError` with OpenSSL's `verify_code` and `verify_message`
+    (20 unknown issuer, 62 wrong name, 10 expired, 9 not yet valid);
+  - after the handshake, `getpeercert()` is the server's certificate decoded as CPython decodes it (`subject`, `issuer`,
+    `version`, `serialNumber`, `notBefore`, `notAfter`, `subjectAltName`, `OCSP`, `caIssuers`,
+    `crlDistributionPoints`), `{}` when the context's `verify_mode` is `CERT_NONE`, and its DER with `binary_form=True`;
+    `version()` is `TLSv1.3` or `TLSv1.2`, and `cipher()` OpenSSL's name of the suite, the version and its secret bits;
+  - `load_verify_locations` fails as CPython does for a file or data without a certificate.
+  Error numbers are Pyodide's (`errno.ECONNREFUSED`), as everywhere in Pyodide.
+- **Different on purpose, or because the engine does not say:** TLS always verifies: `verify_mode = CERT_NONE` and
+  `check_hostname = False` are accepted but change nothing (the error carries a note saying so). An authority the program
+  adds is checked when a connection uses it, not when it is loaded, and one the engine cannot use fails that connection
+  with `ssl.SSLError`; `get_ca_certs()` stays empty. Server-side TLS and client certificates are refused with
+  `ssl.SSLError`. Only IPv4 addresses are used. A socket timeout bounds reads, not connecting or sending. Pyodide's event
+  loop has no sockets, so asyncio streams cannot connect (`ssl.SSLObject` over memory BIOs works).
 - `oxidevm.connect_tcp` and `oxidevm.connect_unix` stay as they were in 0.2.0, with their own timeouts.
 
 ## How it is built and checked
@@ -269,6 +282,7 @@ The unit tests need a Node with WebAssembly JSPI (Node 26, or Node 24 with `--ex
 | `src/python-loader.ts`, `src/artifact-fetch.ts`, `src/lock.ts` | starting Pyodide from the release's verified files |
 | `src/workspace-fs.ts` | Emscripten's file system over the VM's synchronous file API, and which trees Python sees |
 | `src/native-bridge.ts`, `src/socket-bridge.ts`, `src/python/` | `oxidevm.run`, `connect_unix`, `connect_tcp`, and the Python sources |
+| `src/net-bridge.ts`, `src/x509.ts`, `src/python/socket-patch.ts`, `src/python/ssl-patch.ts`, `scripts/record-cpython-net.py` | Python's network through the VM, and CPython's own behaviour that it is tested against |
 | `src/script.ts`, `src/guest.ts`, `src/stdio.ts` | running the program, process identity, standard streams |
 | `upstream/lock.json`, `scripts/fetch-upstream.ts` | what is mirrored, and how |
 | `legal/`, `scripts/generate-notices.ts` | pinned licence texts and the generator of `NOTICES.txt` and `SOURCE-OFFER.md` |
