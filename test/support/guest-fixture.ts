@@ -85,6 +85,8 @@ export const IDENTITY = { pid: 4242, uid: 1000, gid: 1001, cwd: "/workspace" } a
 export interface GuestExtras {
   readonly packages?: ShippedPackages;
   readonly net?: { readonly net: NetHost };
+  /** The VM's /etc/ssl/cert.pem, as the module reads it to compare a program's authorities with (src/trust.ts). */
+  readonly trustStore?: Uint8Array;
 }
 
 export async function startGuest(behave: (argv: readonly string[]) => Child = () => ({}), extras: GuestExtras = {}): Promise<GuestFixture> {
@@ -108,7 +110,7 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     recv: (handle, size, timeoutMs) => { socketRequests.push({ operation: "recv", timeoutMs, size }); return realSockets.recv(handle, size, timeoutMs); },
   };
   const interrupts = createInterrupts();
-  const net = extras.net === undefined ? undefined : netBridge(extras.net, error => kit.net.errno(error));
+  const net = extras.net === undefined ? undefined : netBridge(extras.net, error => kit.net.errno(error), () => extras.trustStore);
   const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets, interrupts, ...(packages === undefined ? {} : { packages }), ...(net === undefined ? {} : { net }) };
   const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }), extras.net === undefined ? undefined : imports => { kit.emscripten.networkImports(imports); });
   for (const tree of [WORKSPACE, TMP]) mountTree(py.FS, files.files, kit.errno, tree);

@@ -17,7 +17,8 @@
  *   None before the handshake (engine TLS API 2: `peerCertificates`, `protocolVersion`, `cipherSuite`).
  * - `load_verify_locations` (so `create_default_context(cafile=...)`, urllib3's and requests' `verify=<file>`) adds the
  *   authorities of a PEM file, a directory of PEM files, or `cadata` to the VM's for that context's sessions (engine TLS
- *   API 2, `trust`), failing as CPython does for a file or data without a certificate.
+ *   API 2, `trust`; only the certificates /etc/ssl/cert.pem lacks, src/trust.ts), failing as CPython does for a file or
+ *   data without a certificate.
  * What differs, on purpose (README.md, Known limits): TLS always verifies, against the VM's /etc/ssl/cert.pem and the
  * authorities the program loaded, whatever `verify_mode` or `check_hostname` ask; server-side TLS and client
  * certificates are refused with `ssl.SSLError`.

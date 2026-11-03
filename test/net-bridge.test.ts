@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_RECEIVE_TIMEOUT_MS, netBridge, receiveTimeoutMs } from "../src/net-bridge.ts";
+import { certificatesOf } from "../src/trust.ts";
 import type { EmscriptenSockets } from "../src/host-types.ts";
 import { fakeNet, httpServer, tlsServer } from "./support/fake-net.ts";
 
@@ -51,5 +52,33 @@ describe("netBridge", () => {
     const { net } = bridge();
     expect(net.decodeCertificate("not bytes")).toMatchObject({ ok: false, code: "EINVAL" });
     expect(net.decodeCertificate(Uint8Array.of(0x30, 0x00))).toMatchObject({ ok: false, code: "EIO", message: "the certificate has no to-be-signed part" });
+  });
+});
+
+describe("the authorities a program adds", () => {
+  const pem = (...marks: string[]): Uint8Array => new TextEncoder().encode(marks.map(mark => `# ${mark}\n-----BEGIN CERTIFICATE-----\n${btoa(mark)}\n-----END CERTIFICATE-----\n`).join(""));
+  function trusting(store: Uint8Array | undefined): { readonly net: ReturnType<typeof netBridge>; readonly given: (readonly string[])[]; readonly reads: number[] } {
+    const fake = fakeNet({}, {}), given: (readonly string[])[] = [], reads: number[] = [];
+    const tls = (options: Parameters<typeof fake.host.net.tls>[0]): ReturnType<typeof fake.host.net.tls> => fake.host.net.tls(options);
+    const net = netBridge({ net: { ...fake.host.net, tls: options => { given.push((options.trust ?? []).map(entry => new TextDecoder().decode(entry))); return tls(options); } } }, () => 5, () => { reads.push(1); return store; });
+    return { net, given, reads };
+  }
+
+  it("passes each certificate the VM's store lacks once, as DER, and reads the store only once", () => {
+    const { net, given, reads } = trusting(pem("vm-one", "vm-two"));
+    expect(net.tlsOpen("a.test", [], [pem("vm-one", "extra-one", "extra-one"), Uint8Array.of(0x30, 0x01)]).ok).toBe(true);
+    expect(net.tlsOpen("a.test", [], []).ok).toBe(true);
+    expect(net.tlsOpen("a.test", [], [pem("vm-two")]).ok).toBe(true);
+    expect(given).toEqual([["extra-one", "0\u0001"], [], []]);
+    expect(reads).toEqual([1]);
+  });
+
+  it("refuses more than the engine takes, and bytes that are not bytes", () => {
+    const { net } = trusting(undefined);
+    const many = pem(...Array.from({ length: 65 }, (_, index) => `authority ${String(index)}`));
+    expect(net.tlsOpen("a.test", [], [many])).toMatchObject({ ok: false, code: "ERR_TLS_INVALID_TRUST", message: "TLS: the program added 65 authorities that /etc/ssl/cert.pem lacks; a connection takes at most 64" });
+    expect(net.tlsOpen("a.test", [], ["text"])).toMatchObject({ ok: false, code: "EINVAL" });
+    // A block that is not base64 stays PEM text, for the engine to refuse.
+    expect(certificatesOf(new TextEncoder().encode("-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----\n")).map(entry => new TextDecoder().decode(entry))).toEqual(["-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----"]);
   });
 });

@@ -88,7 +88,9 @@ beforeAll(async () => {
     "93.184.216.36:443": tlsServer(() => () => ({})),
     "93.184.216.37:443": tlsServer(httpServer("private hello")),
   }, RICH_PEER);
-  guest = await startGuest(undefined, { net: net.host });
+  // The VM's store holds Mozilla's roots, as certifi's bundle does, so requests' default adds no authority of its own.
+  const certifi = await import("node:child_process").then(child => child.execFileSync("unzip", ["-p", join(root, "upstream", WHEELS.certifi), "certifi/cacert.pem"]));
+  guest = await startGuest(undefined, { net: net.host, trustStore: Uint8Array.from(certifi) });
   // The HTTP libraries, unpacked as the module's import hook unpacks them (src/python-loader.ts loads them in the browser).
   const sitePackages: unknown = guest.py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
   if (typeof sitePackages !== "string") throw new Error("Pyodide did not report its site-packages directory");
@@ -229,7 +231,8 @@ describe("what the server presented (engine TLS API 2)", () => {
 });
 
 describe("authorities a program adds (load_verify_locations, engine TLS API 2 trust)", () => {
-  const PEM = `-----BEGIN CERTIFICATE-----\\n${PRIVATE_AUTHORITY}\\n-----END CERTIFICATE-----\\n`;
+  // A PEM block whose bytes are the fake network's mark for the private authority (test/support/fake-net.ts).
+  const PEM = `# a comment, as CA bundles carry\n-----BEGIN CERTIFICATE-----\n${btoa(PRIVATE_AUTHORITY)}\n-----END CERTIFICATE-----\n`;
 
   it("trusts a CA file, a directory of them, or cadata, for that context only, and so do urllib, requests and httpx", async () => {
     const result = await guest.run(`import os, socket, ssl, urllib.request, requests, httpx
@@ -268,7 +271,7 @@ print(httpx.get('https://private.test/', verify=ssl.create_default_context(cafil
   });
 
   it("reports an authority the engine cannot use as ssl.SSLError when the session opens", async () => {
-    const result = await guest.run("import socket, ssl\ncontext = ssl.create_default_context(cadata='-----BEGIN CERTIFICATE-----\\nNOT A CA\\n-----END CERTIFICATE-----\\n')\ntry:\n    context.wrap_socket(socket.create_connection(('private.test', 443)), server_hostname='private.test')\nexcept ssl.SSLError as error:\n    print(type(error).__name__, error)\n");
+    const result = await guest.run(`import socket, ssl\ncontext = ssl.create_default_context(cadata='-----BEGIN CERTIFICATE-----\\n${btoa("NOT A CA")}\\n-----END CERTIFICATE-----\\n')\ntry:\n    context.wrap_socket(socket.create_connection(('private.test', 443)), server_hostname='private.test')\nexcept ssl.SSLError as error:\n    print(type(error).__name__, error)\n`);
     expect(result).toEqual({ status: 0, stdout: "SSLError [SSL: ERR_TLS_INVALID_TRUST] TLS: a trust entry holds no usable CA certificate (_ssl.c:1081)\n", stderr: "" });
   });
 });

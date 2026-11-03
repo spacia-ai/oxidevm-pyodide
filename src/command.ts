@@ -18,6 +18,9 @@ import { mountTree, visibleTrees } from "./workspace-fs.ts";
 
 type IO = CommandIO<PythonCommand>;
 
+/** The largest /etc/ssl/cert.pem read to compare a program's authorities with. */
+const MAX_TRUST_STORE_BYTES = 4 * 1024 * 1024;
+
 /** How the process was started: by a program in the VM through one of the commands, or by the application. */
 function launchOf(io: IO): Launch {
   const { invocation } = io;
@@ -55,7 +58,9 @@ function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandL
  */
 export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks<PythonCommand> {
   const sockets = socketBridge(host);
-  const net = netBridge(host, error => host.kit.net.errno(error));
+  // The VM's own authorities, so that a program's CA bundle adds only those the VM lacks (src/trust.ts).
+  const vmStore = (): Uint8Array | undefined => { try { return host.fs.readFile("/etc/ssl/cert.pem", MAX_TRUST_STORE_BYTES); } catch { return undefined; } };
+  const net = netBridge(host, error => host.kit.net.errno(error), vmStore);
   const report = (error: unknown): void => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); };
   return {
     async main(io) {

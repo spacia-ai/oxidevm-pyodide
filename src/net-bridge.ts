@@ -1,4 +1,5 @@
 import type { EmscriptenSockets, NetHost, NetTlsSession } from "./host-types.ts";
+import { extraAuthorities, MAX_EXTRA_AUTHORITIES, storeKeys } from "./trust.ts";
 import { cipherOf, decodeCertificate } from "./x509.ts";
 
 /**
@@ -86,8 +87,13 @@ export function receiveTimeoutMs(seconds: unknown): number | null | undefined {
   return Math.min(Math.max(1, Math.ceil(seconds * 1000)), MAX_RECEIVE_TIMEOUT_MS);
 }
 
-export function netBridge(host: { readonly net: NetHost }, errnoOf: (error: unknown) => number): NetBridge {
+/**
+ * `vmStore` reads the VM's /etc/ssl/cert.pem (undefined when it cannot), once, when a program first adds authorities: the
+ * session is given only those the VM lacks (src/trust.ts).
+ */
+export function netBridge(host: { readonly net: NetHost }, errnoOf: (error: unknown) => number, vmStore: () => Uint8Array | undefined = () => undefined): NetBridge {
   const sessions = new Map<number, NetTlsSession>();
+  let vmKeys: ReadonlySet<string> | undefined;
   let sockets: EmscriptenSockets | undefined;
   let next = 1;
   const attempt = <T>(work: () => T): NetOutcome<T> => {
@@ -108,9 +114,14 @@ export function netBridge(host: { readonly net: NetHost }, errnoOf: (error: unkn
       const protocols = Array.isArray(alpn) ? Array.from<unknown>(alpn).filter((item): item is string => typeof item === "string") : [];
       const anchors = Array.isArray(trust) ? Array.from<unknown>(trust) : [];
       if (!anchors.every((item): item is Uint8Array => item instanceof Uint8Array)) return refused("EINVAL", "trusted authorities must be bytes");
+      if (anchors.length > 0) vmKeys ??= storeKeys(vmStore());
+      const extra = anchors.length === 0 || vmKeys === undefined ? [] : extraAuthorities(anchors, vmKeys);
+      if (extra.length > MAX_EXTRA_AUTHORITIES) {
+        return refused("ERR_TLS_INVALID_TRUST", `TLS: the program added ${String(extra.length)} authorities that /etc/ssl/cert.pem lacks; a connection takes at most ${String(MAX_EXTRA_AUTHORITIES)}`);
+      }
       if (sessions.size >= MAX_TLS_SESSIONS) return refused("EMFILE", `a program may hold ${String(MAX_TLS_SESSIONS)} TLS sessions at once`);
       return attempt(() => {
-        const session = host.net.tls({ serverName, alpn: protocols, ...(anchors.length === 0 ? {} : { trust: anchors }) });
+        const session = host.net.tls({ serverName, alpn: protocols, ...(extra.length === 0 ? {} : { trust: extra }) });
         const handle = next++;
         sessions.set(handle, session);
         return handle;
