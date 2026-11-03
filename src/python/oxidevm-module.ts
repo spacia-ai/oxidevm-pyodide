@@ -25,11 +25,21 @@ import os as _os
 import types as _types
 
 import _oxidevm_bridge as _bridge
-from pyodide.ffi import run_sync, to_js
+from pyodide.ffi import can_run_sync, run_sync, to_js
 
 __all__ = ["Connection", "connect_tcp", "connect_unix", "run"]
 
 _MAX_RECV = 1024 * 1024
+_NO_JSPI = (
+    "the oxidevm module waits for the VM with WebAssembly JavaScript Promise Integration (JSPI), which this browser does"
+    " not provide; Python's own socket module reaches services in the VM without it"
+)
+
+
+def _need_waits():
+    """Refuses before anything starts where Python cannot wait for JavaScript (no WebAssembly JSPI in this browser)."""
+    if not can_run_sync():
+        raise OSError(_errno.ENOTSUP, _NO_JSPI)
 
 
 def _wait(promise):
@@ -55,6 +65,7 @@ def run(argv, *, input="", check=True, timeout=10):
     The result has pid, returncode (minus the signal number when a signal ended the program), stdout and stderr. When
     check is true, a program that does not exit with status 0 raises RuntimeError with the start of its standard error.
     """
+    _need_waits()
     reply, error = _wait(_bridge.run(_json.dumps(argv), input, round(timeout * 1000)))
     if error is not None:
         _bridge.fail(error)
@@ -145,6 +156,7 @@ def connect_unix(path, *, timeout=30.0):
 
     timeout limits only the connection attempt; use settimeout for later reads and writes.
     """
+    _need_waits()
     path = _os.fspath(path)
     if not isinstance(path, str) or not path.startswith("/"):
         raise ValueError("path must be an absolute path")
@@ -156,6 +168,7 @@ def connect_tcp(port, host="127.0.0.1", *, timeout=30.0):
 
     timeout limits only the connection attempt; use settimeout for later reads and writes.
     """
+    _need_waits()
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be an integer from 1 to 65535")
     if not isinstance(host, str) or not host:

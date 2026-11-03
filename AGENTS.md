@@ -20,9 +20,14 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   mode, `PYTHON_BASIC_REPL=1`, readline unimportable) and replayed by `test/repl.test.ts`.
 - Anything that can be refused (usage, a directory Python cannot see, an unreadable program)
   is refused before Pyodide loads, so that it costs nothing.
+- WebAssembly JSPI is optional (the manifest does not require it; Firefox ships it behind a preference). Everything a
+  command, the REPL, `-m`, imports and Python's network need is synchronous: `time.sleep` blocks with `Atomics.wait`
+  (`Interrupts.sleepSync`), a package a program imports is unpacked with `host.artifacts.bytesSync` (`installSync`), and
+  sockets use the kit's synchronous path. Only the `oxidevm` module's waits use `run_sync`, and they refuse with ENOTSUP
+  before starting anything when `can_run_sync()` is false. Do not add a new `run_sync` to a path a command needs.
 - Ctrl+C (`src/signals.ts`): SIGINT is trapped once Pyodide has loaded, and the runner arms Pyodide's interrupt buffer from
   inside its own `try`. Pyodide's event loop must never see a pending interrupt: every JavaScript call that Python waits for
-  (`run_sync`) holds a pending Ctrl+C before it settles and resolves with its outcome instead of rejecting (`held` in
+  (`run_sync`, only the `oxidevm` module's `run` and `connect_*`) holds a pending Ctrl+C before it settles and resolves with its outcome instead of rejecting (`held` in
   `src/guest.ts`), and Python calls `_oxidevm_bridge.check_interrupt()` right after it, which puts the Ctrl+C back and
   raises KeyboardInterrupt. A new wait of the bridge must do the same. Ctrl+C during the program's own asyncio waits is
   not handled yet (README.md, Known limits). The interpreter polls the buffer through its import

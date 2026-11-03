@@ -39,7 +39,7 @@ export default defineModule({
     commands: ["python", "python3"],
     requires: {
       host: ["files.async", "files.sync", "net.internet", "process.info", "process.signals", "process.spawn", "sockets.connect"],
-      browser: ["cross-origin-isolated", "jspi"],
+      browser: ["cross-origin-isolated"],
     },
     network: { purpose: "Python programs reach the internet through the VM" },
     options: {

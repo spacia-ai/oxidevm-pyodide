@@ -4,7 +4,7 @@ import type { ModuleHandle } from "@oxidevm/sdk/wasm";
 import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
-import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
+import { cancellation, exitStatuses, HAS_JSPI, identity, nativeRun, oxidevmWithoutJspi, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
 import { INTERNET_SCENARIOS } from "./scenarios-internet.ts";
 import type { InternetConfig } from "./scenarios-internet.ts";
 import { NETWORK_SCENARIOS } from "./scenarios-network.ts";
@@ -41,10 +41,13 @@ const SCENARIOS: readonly Scenario[] = [
   ["files are shared both ways with native Linux, permissions included, while the module runs", filesBothWays],
   ["files of 20 MiB cross the module's transfer limit in both directions", largeFiles],
   ["chmod, truncate, symlink, shutil.copy and utime reach the VM's files", metadata],
-  ["oxidevm.run runs native programs with input, status, timeout and output bounds", nativeRun],
-  ["cancelling the module retires its native child in under 5 seconds", cancellation],
+  // The oxidevm module waits for the VM with WebAssembly JSPI; without it (Firefox by default) it refuses precisely.
+  ...(HAS_JSPI ? [
+    ["oxidevm.run runs native programs with input, status, timeout and output bounds", nativeRun],
+    ["cancelling the module retires its native child in under 5 seconds", cancellation],
+  ] as const : [["without JSPI, the oxidevm module refuses with ENOTSUP and the rest of Python works", oxidevmWithoutJspi]] as const),
   ["matplotlib writes a valid PNG that Linux recognises", plot],
-  ["oxidevm.connect_unix and connect_tcp talk to native services", sockets],
+  ...(HAS_JSPI ? [["oxidevm.connect_unix and connect_tcp talk to native services", sockets]] as const : []),
   ["startup timing, for the record", startupTiming],
 ];
 

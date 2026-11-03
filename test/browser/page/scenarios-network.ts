@@ -1,4 +1,4 @@
-import { check, decoder, encoder, sleep } from "./support.ts";
+import { check, decoder, encoder, exitShell, sleep, within } from "./support.ts";
 import type { Context } from "./support.ts";
 import { Capture } from "./support.ts";
 
@@ -40,7 +40,8 @@ async function nativeServer(context: Context, script: string, ready: string): Pr
   await context.vm.workspace.writeText(`_oxidevm/${ready}.py`, script);
   const handle = await context.vm.spawn({ command: "/usr/bin/python3", args: [`${WORK}/${ready}.py`], cwd: WORK });
   const output = new Capture(handle.stdout);
-  await output.waitFor(ready, 60_000);
+  // The image's own CPython starts its server; under Firefox's WebAssembly that has taken over 60 s on a busy host.
+  await output.waitFor(ready, 180_000);
   return { stop: async () => { await handle.kill("SIGKILL").catch(() => undefined); await handle.exit.catch(() => undefined); } };
 }
 
@@ -87,20 +88,19 @@ export async function networkInterruptRecv(context: Context): Promise<string> {
     await context.vm.workspace.writeText("_oxidevm/waits.py", "import socket\nconnection = socket.create_connection(('127.0.0.1', 8766))\nprint('connected', flush=True)\nconnection.recv(10)\n");
     const handle = await context.vm.spawn({ command: "/bin/sh", args: ["-i"], cwd: WORK, terminal: { columns: 100, rows: 30 } });
     const writer = handle.stdin.getWriter(), output = new Capture(handle.output);
-    await writer.write(encoder.encode(`NO_COLOR=1 python3 ${WORK}/waits.py\n`));
+    await within("typing the command", 30_000, writer.write(encoder.encode(`NO_COLOR=1 python3 ${WORK}/waits.py\n`)));
     await output.waitFor("connected", 60_000);
     await sleep(500);
-    await handle.interrupt();
+    await within("pressing Ctrl+C", 30_000, handle.interrupt());
     await output.waitFor("KeyboardInterrupt", 30_000);
-    await writer.write(encoder.encode('echo "s$((1+1))=$?"\n'));
+    await within("typing echo", 30_000, writer.write(encoder.encode('echo "s$((1+1))=$?"\n')));
     await output.waitFor("s2=");
     await sleep(300);
     const shown = output.text;
-    await writer.write(encoder.encode("exit\n"));
-    await handle.exit;
     check(shown.includes("s2=130") && shown.includes("connection.recv(10)"), `Ctrl+C during recv: ${JSON.stringify(shown.slice(-800))}`);
+    await within("ending the shell", 60_000, exitShell(handle, writer, () => output.text));
   } finally {
-    await server.stop();
+    await within("stopping the native server", 60_000, server.stop());
   }
   return "Ctrl+C during a recv that waits for a silent server in the VM raised KeyboardInterrupt and ended python3 by SIGINT (130)";
 }

@@ -29,7 +29,7 @@ export interface CommandHost {
   readonly signal: AbortSignal;
   /** The packages to load before the program starts, from the module's `packages` option (default none). */
   readonly options: { readonly packages: readonly PackageName[] };
-  readonly artifacts: { bytes(name: ShippedFile): Promise<Uint8Array<ArrayBuffer>>; compile(name: "pyodide.asm.wasm"): Promise<WebAssembly.Module> };
+  readonly artifacts: { bytes(name: ShippedFile): Promise<Uint8Array<ArrayBuffer>>; bytesSync(name: ShippedFile): Uint8Array<ArrayBuffer>; compile(name: "pyodide.asm.wasm"): Promise<WebAssembly.Module> };
   readonly kit: Pick<Host["kit"], "errno" | "runNative" | "emscripten" | "net">;
   readonly stdio: Host["stdio"];
   readonly fs: SyncFiles;

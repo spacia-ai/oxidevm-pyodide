@@ -223,3 +223,36 @@ export async function startupTiming(context: Context): Promise<string> {
   }
   return `from the start of the module process to its exit, three runs each (diagnostic only): ${rows.join("; ")}`;
 }
+
+/** Whether this browser has WebAssembly JSPI, which the `oxidevm` module's waits need (the module worker runs in it too). */
+export const HAS_JSPI = typeof Reflect.get(WebAssembly, "Suspending") === "function";
+
+/**
+ * Without JSPI: the `oxidevm` module's run, connect_unix and connect_tcp refuse with ENOTSUP before anything starts, and
+ * the rest of Python (a package on import, time.sleep, Python's own socket to a native server) works.
+ */
+export async function oxidevmWithoutJspi(context: Context): Promise<string> {
+  const result = await run(context, `import errno, json, socket, time
+import oxidevm
+from pyodide.ffi import can_run_sync
+
+out = {"can_run_sync": can_run_sync()}
+for name, call in (("run", lambda: oxidevm.run(["/bin/sh", "-c", "touch /workspace/_oxidevm/ran"])), ("unix", lambda: oxidevm.connect_unix("/workspace/_oxidevm/none.sock")), ("tcp", lambda: oxidevm.connect_tcp(5598))):
+    try:
+        call()
+        out[name] = "ran"
+    except OSError as error:
+        out[name] = error.errno == errno.ENOTSUP and "JSPI" in error.strerror
+began = time.monotonic()
+time.sleep(0.2)
+out["sleep"] = time.monotonic() - began >= 0.19
+import numpy
+out["numpy"] = int(numpy.arange(4).sum())
+print(json.dumps(out, sort_keys=True))
+`, { name: "no-jspi" });
+  expectStatus(result, 0, "the oxidevm module without JSPI");
+  same(parsed(result.stdout), { can_run_sync: false, numpy: 6, run: true, sleep: true, tcp: true, unix: true }, "the oxidevm module without JSPI");
+  const ran = await native(context.vm, "/bin/ls", ["/workspace/_oxidevm/ran"]);
+  same(ran.code !== 0, true, "no native program started");
+  return `run, connect_unix and connect_tcp refused with ENOTSUP naming JSPI before anything started; time.sleep and numpy on import worked (${String(result.ms)} ms)`;
+}

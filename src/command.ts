@@ -76,7 +76,7 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
 
       const info = await host.process.info();
       const python = await loadPython({
-        packages: host.options.packages, bytes: name => host.artifacts.bytes(name), compile: name => host.artifacts.compile(name),
+        packages: host.options.packages, bytes: name => host.artifacts.bytes(name), bytesSync: name => host.artifacts.bytesSync(name), compile: name => host.artifacts.compile(name),
         env: pythonEnvironment(io.env), log: text => { host.log(text); }, networkImports: imports => { host.kit.emscripten.networkImports(imports); },
       }, engine);
       const { py } = python;

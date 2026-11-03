@@ -18,8 +18,11 @@ oxidevm wasm add github:spacia-ai/oxidevm-pyodide@v0.2.0
 
 The command shows what the module declares and asks before it installs anything. A module is code that runs in a worker of
 your page with that authority, so review it as you would a dependency. It needs a self-hosted runtime on a cross-origin
-isolated page and a browser with WebAssembly JSPI (`WebAssembly.Suspending` and `WebAssembly.promising`); without them it exits
-with status 122 and names what is missing.
+isolated page; without it, it exits with status 122 and names what is missing. WebAssembly JSPI (`WebAssembly.Suspending`
+and `WebAssembly.promising`) is used where the browser has it and is not required: Python programs, the REPL, `-m`, packages
+loaded on import, `time.sleep`, Ctrl+C and Python's own network work without it (Firefox ships JSPI only behind a
+preference). Only the `oxidevm` module's `run`, `connect_unix` and `connect_tcp` wait for the VM through it; without it they
+raise `OSError(errno.ENOTSUP)` before anything starts.
 
 ### As commands of the VM
 
@@ -234,8 +237,11 @@ packages. `micropip` and installs from the network are out of scope.
   whose programs you would let run in your page.
 - Every run starts Pyodide again and unpacks the packages it imports (or that `packages` preloads); how long that takes
   depends on the host: about a second for the interpreter alone, several more with pandas and Matplotlib.
-- A package loads on import only where Python can wait for it: in the program and at the prompt, not inside a callback that
-  JavaScript calls. There the import fails with `ModuleNotFoundError` saying to name the package in `packages`.
+- A package that loads on import is read and unpacked synchronously, so the module's worker is busy while it loads (pandas
+  and Matplotlib take a few seconds); a Ctrl+C meanwhile is raised once the load ends.
+- Without WebAssembly JSPI, `oxidevm.run`, `connect_unix` and `connect_tcp` raise `OSError(errno.ENOTSUP)`; Python's own
+  `socket` reaches services in the VM without it. Pyodide's own JSPI-based features (`pyodide.ffi.run_sync`, asyncio
+  that blocks on JavaScript) are what they are in Pyodide on that browser.
 - The interactive interpreter is CPython's basic REPL only: no PyREPL (colours, multi-line editing, history, completion),
   and `sys.flags.interactive` and `sys.flags.inspect` stay 0 with `-i`.
 - `sys.exit(n)` with `n & 255` above 119 exits with 119 (CPython exits with up to 255). `-I` and `-P` do not take the

@@ -12,9 +12,14 @@ import type { ShippedFile, WheelFile } from "./shipped.ts";
 
 export type PyodideOptions = NonNullable<Parameters<typeof loadPyodide>[0]>;
 
-/** What the loader asks of a started Pyodide: to load packages by name. The real one satisfies it; tests stand in for it. */
+/**
+ * What the loader asks of a started Pyodide: to load packages by name before the program, to unpack a wheel while it
+ * runs, and where its site-packages are. The real one satisfies it; tests stand in for it.
+ */
 export interface PackageLoader {
   loadPackage(names: string[], options: { messageCallback: (message: string) => void; errorCallback: (message: string) => void }): Promise<unknown>;
+  unpackArchive(buffer: Uint8Array, format: string, options: { extractDir: string }): void;
+  runPython(code: string): unknown;
 }
 
 /**
@@ -78,6 +83,8 @@ export interface LoadRequest {
   readonly packages: readonly string[];
   /** Reads a release artifact, verified against its pin (`host.artifacts.bytes`). */
   readonly bytes: (name: ShippedFile) => Promise<Uint8Array<ArrayBuffer>>;
+  /** Reads a wheel's verified copy synchronously (`host.artifacts.bytesSync`), for a package a program imports. */
+  readonly bytesSync: (name: WheelFile) => Uint8Array<ArrayBuffer>;
   /** The interpreter, compiled once for the VM from its verified copy (`host.artifacts.compile`). */
   readonly compile: (name: "pyodide.asm.wasm") => Promise<WebAssembly.Module>;
   /** The process environment Python starts with. */
@@ -99,10 +106,13 @@ export interface LoadedPython<P extends PackageLoader> {
   /** The packages loaded so far, by name. */
   readonly loaded: ReadonlySet<string>;
   /**
-   * Loads the packages and what they depend on from the release's verified copies, and resolves with every package
-   * that is now loaded. A package the release does not carry is refused before anything is read.
+   * Installs the packages and what they depend on from the release's verified copies, synchronously, and answers with
+   * every package that is now loaded. Each wheel not loaded yet is read with `bytesSync` and unpacked into
+   * site-packages; its extension modules are loaded when Python imports them (a synchronous dlopen in the module's
+   * worker), so a program can import a package where Python cannot wait for JavaScript, without WebAssembly JSPI. A
+   * package the release does not carry is refused before anything is read.
    */
-  install(names: readonly string[]): Promise<readonly string[]>;
+  installSync(names: readonly string[]): readonly string[];
 }
 
 /** The wheels of `names` and of everything they need, refusing a package whose wheel the release does not carry. */
@@ -177,10 +187,20 @@ export async function loadPython<P extends PackageLoader>(request: LoadRequest, 
     stderr: line => { request.log(line); },
   })));
   await loadPackages(py, request.packages, preload);
+  let sitePackages: string | undefined;
   return {
     py, loaded, imports: importMap(lock, isWheelFile),
-    install: async names => {
-      await loadPackages(py, names, shippedWheels(lock, names));
+    installSync: names => {
+      const wheels = shippedWheels(lock, names).filter(wheel => !loaded.has(wheel.name));
+      if (wheels.length > 0 && sitePackages === undefined) {
+        const found = py.runPython("import sysconfig\nsysconfig.get_path('purelib')");
+        if (typeof found !== "string") throw new ModuleError("package-install", "Pyodide did not report its site-packages directory");
+        sitePackages = found;
+      }
+      for (const wheel of wheels) {
+        py.unpackArchive(request.bytesSync(wheel.fileName), "wheel", { extractDir: sitePackages ?? "" });
+        loaded.add(wheel.name);
+      }
       return [...loaded].sort();
     },
   };

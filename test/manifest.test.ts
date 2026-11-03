@@ -48,7 +48,7 @@ describe("the manifest", () => {
     expect(manifest.abi).toBe("emscripten");
     expect(manifest.process).toEqual({ kind: "command" });
     expect([...manifest.requires.host].sort()).toEqual(["files.async", "files.sync", "net.internet", "process.info", "process.signals", "process.spawn", "sockets.connect"]);
-    expect([...manifest.requires.browser].sort()).toEqual(["cross-origin-isolated", "jspi"]);
+    expect([...manifest.requires.browser].sort()).toEqual(["cross-origin-isolated"]);
   });
 
   it("lists exactly the artifacts that src/shipped.ts and upstream/lock.json name, each from where it is mirrored or written", () => {

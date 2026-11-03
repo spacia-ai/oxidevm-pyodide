@@ -2,17 +2,16 @@
  * Loads a shipped package when a program imports it: a finder that goes on `sys.meta_path` ahead of Pyodide's own hook
  * (which would only say how to install the package) and, for the top-level name of a package the release carries
  * (`_oxidevm_packages.imports`, from the lock's `imports`: `PIL` is pillow, `pylab` and `mpl_toolkits` are matplotlib),
- * loads it and what it needs from the release's verified copies, then lets the ordinary finders import it. The import
- * waits for the load as a system call waits (`run_sync`), so a Ctrl+C meanwhile is raised once it ends, like after any
- * wait of the bridge. Where Python cannot wait for JavaScript (`can_run_sync` is false), the import fails with a
- * ModuleNotFoundError that says to name the package in the module's `packages` option, which loads it before the program.
+ * installs it and what it needs from the release's verified copies, synchronously (`installSync` in
+ * src/python-loader.ts), then lets the ordinary finders import it. It needs no WebAssembly JSPI and works wherever Python
+ * imports, callbacks from JavaScript included. A Ctrl+C during the install is raised once it ends, like after any call
+ * of the bridge.
  */
 export const LAZY_PACKAGES_SOURCE = `import importlib as _importlib
 import sys as _sys
 
 import _oxidevm_bridge as _bridge
 import _oxidevm_packages as _packages
-from pyodide.ffi import can_run_sync as _can_run_sync, run_sync as _run_sync
 
 
 class _ShippedPackages:
@@ -28,13 +27,7 @@ class _ShippedPackages:
         package = self._imports.get(name)
         if package is None or package in self._loaded:
             return None
-        if not _can_run_sync():
-            raise ModuleNotFoundError(
-                "No module named " + repr(name) + ": the " + package + " package loads on import only where Python can"
-                + " wait; name it in the module's packages option to load it before the program starts",
-                name=name,
-            )
-        outcome = _run_sync(_bridge.load_packages(package))
+        outcome = _bridge.load_packages(package)
         _bridge.check_interrupt()
         if not outcome.ok:
             raise ImportError("cannot load the " + package + " package for " + repr(name) + ": " + str(outcome.error), name=name)

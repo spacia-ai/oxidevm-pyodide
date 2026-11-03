@@ -60,8 +60,11 @@ export interface Interrupts {
   hold(): void;
   /** Puts a held Ctrl+C back, unless a newer one is already waiting. */
   restore(): void;
-  /** Waits for the time to pass, or until a Ctrl+C is pending, which it holds. */
-  sleep(milliseconds: number): Promise<void>;
+  /**
+   * Blocks the module's worker until the time has passed, or until a Ctrl+C is pending, which it holds. It waits with
+   * `Atomics.wait` in slices of `SLEEP_POLL_MS`, so it needs no WebAssembly JSPI.
+   */
+  sleepSync(milliseconds: number): void;
 }
 
 export function createInterrupts(): Interrupts {
@@ -84,15 +87,16 @@ export function createInterrupts(): Interrupts {
       if (buffer !== undefined && held !== 0) Atomics.compareExchange(buffer, 0, 0, held);
       held = 0;
     },
-    sleep: milliseconds => new Promise<void>(resolve => {
+    sleepSync: milliseconds => {
       const deadline = Date.now() + milliseconds;
-      const tick = (): void => {
+      // The interrupt buffer itself when it is shared, so that a runtime that notifies it ends the wait at once.
+      const cell = buffer?.buffer instanceof SharedArrayBuffer ? buffer : new Int32Array(new SharedArrayBuffer(4));
+      for (;;) {
         const left = deadline - Date.now();
-        if (pending() || left <= 0) { hold(); resolve(); return; }
-        setTimeout(tick, Math.min(left, SLEEP_POLL_MS));
-      };
-      tick();
-    }),
+        if (pending() || left <= 0) { hold(); return; }
+        Atomics.wait(cell, 0, 0, Math.min(left, SLEEP_POLL_MS));
+      }
+    },
   };
 }
 

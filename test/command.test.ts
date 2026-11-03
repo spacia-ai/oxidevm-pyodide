@@ -92,6 +92,7 @@ function setup(options: SetupOptions = {}): Setup {
     artifacts: {
       bytes: options.bytes ?? ((name) => { artifactsRead.push(name); return Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : name)); }),
       // The runner answers with the module the VM compiled once; the test counts the requests.
+      bytesSync: name => { artifactsRead.push(`bytesSync ${name}`); return new TextEncoder().encode(name); },
       compile: name => { artifactsRead.push(`compile ${name}`); return Promise.resolve(new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))); },
     },
     kit,

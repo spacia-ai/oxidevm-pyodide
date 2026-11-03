@@ -41,8 +41,8 @@ export interface ShippedPackages {
   readonly imports: ReadonlyMap<string, string>;
   /** The packages loaded before the program started. */
   readonly loaded: ReadonlySet<string>;
-  /** Loads packages and what they need, and resolves with every package now loaded. */
-  install(names: readonly string[]): Promise<readonly string[]>;
+  /** Installs packages and what they need, synchronously, and answers with every package now loaded. */
+  installSync(names: readonly string[]): readonly string[];
 }
 
 export interface GuestBridges {
@@ -79,7 +79,8 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
     send: (handle: unknown, data: unknown, timeoutMs: unknown) => held(sockets.send(handle, data, timeoutMs)),
     recv: (handle: unknown, size: unknown, timeoutMs: unknown) => held(sockets.recv(handle, size, timeoutMs)),
     close: (handle: unknown) => held(sockets.close(handle)),
-    sleep: (milliseconds: unknown) => interrupts.sleep(typeof milliseconds === "number" && milliseconds > 0 ? milliseconds : 0),
+    // Synchronous, so that time.sleep works without WebAssembly JSPI; it ends early, holding it, when a Ctrl+C arrives.
+    sleep: (milliseconds: unknown) => { interrupts.sleepSync(typeof milliseconds === "number" && milliseconds > 0 ? milliseconds : 0); },
     resolve: (name: unknown) => net?.resolve(name),
     tls_open: (serverName: unknown, alpn: unknown, trust: unknown) => net?.tlsOpen(serverName, alpn, trust),
     tls_receive: (handle: unknown, ciphertext: unknown) => net?.tlsReceive(handle, ciphertext),
@@ -93,7 +94,15 @@ export function installGuest(py: PyodideInterface, identity: ProcessIdentity, br
     receive_timeout: (fd: unknown, seconds: unknown) => net?.receiveTimeout(fd, seconds),
     tls_close: (handle: unknown) => net?.tlsClose(handle),
     tls_free: (handle: unknown) => { net?.tlsFree(handle); },
-    load_packages: (name: unknown) => held(typeof name === "string" && bridges.packages !== undefined ? bridges.packages.install([name]) : Promise.reject(new TypeError("no package to load"))),
+    // Synchronous (src/python-loader.ts installSync), so that an import loads a package without WebAssembly JSPI.
+    load_packages: (name: unknown): Outcome<readonly string[]> => {
+      try {
+        if (typeof name !== "string" || bridges.packages === undefined) throw new TypeError("no package to load");
+        return { ok: true, value: bridges.packages.installSync([name]) };
+      } catch (error: unknown) {
+        return { ok: false, error };
+      }
+    },
     // Called by Python after every wait: a held Ctrl+C raises KeyboardInterrupt now, as after any system call in CPython.
     check_interrupt: () => { interrupts.restore(); py.checkInterrupt(); },
     // Raises the failure of a wait in Python, as the JsException it would have been.

@@ -33,6 +33,8 @@ interface Fixture {
   readonly network: string[];
   /** What the fake Pyodide fetched for each `loadPackage`, with the outcome. */
   readonly fetchedByLoad: string[][];
+  /** Every wheel unpacked while the program runs, as "<extractDir>: <its bytes>". */
+  readonly unpacked: string[];
 }
 
 /** A compiled WebAssembly module: the smallest valid one, standing in for the interpreter the VM compiled. */
@@ -46,10 +48,12 @@ interface Overrides {
   readonly failPackages?: Error;
   /** The wheels the fake Pyodide fetches when asked to load packages. */
   readonly fetchOnLoad?: readonly string[];
+  /** What the fake Pyodide reports as its site-packages directory (default /lib/python3.14/site-packages). */
+  readonly sitePackages?: unknown;
 }
 
 function fixture(packages: readonly string[], overrides: Overrides = {}): Fixture {
-  const asked: ShippedFile[] = [], compiled: string[] = [], events: string[] = [], options: PyodideOptions[] = [], loaded: string[][] = [], logs: string[] = [], network: string[] = [], fetchedByLoad: string[][] = [];
+  const asked: ShippedFile[] = [], compiled: string[] = [], events: string[] = [], options: PyodideOptions[] = [], loaded: string[][] = [], logs: string[] = [], network: string[] = [], fetchedByLoad: string[][] = [], unpacked: string[] = [];
   const scope: { fetch: Fetch } = { fetch: (input) => { network.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url); return Promise.resolve(new Response("network")); } };
   const wasm: WasmScope = {
     instantiateStreaming: () => Promise.reject(new Error("the original instantiateStreaming")),
@@ -58,6 +62,7 @@ function fixture(packages: readonly string[], overrides: Overrides = {}): Fixtur
   const request: LoadRequest = {
     packages, env: { HOME: "/workspace", FOO: "bar" }, log: line => { logs.push(line); }, networkImports: () => { events.push("networkImports"); },
     compile: name => { compiled.push(name); events.push(`compile ${name}`); return Promise.resolve(COMPILED); },
+    bytesSync: name => { asked.push(name); events.push(`bytesSync ${name}`); return new TextEncoder().encode(`content of ${name}`); },
     bytes: overrides.bytes ?? ((name: ShippedFile) => { asked.push(name); events.push(`bytes ${name}`); return Promise.resolve(name === "pyodide-lock.json" ? new TextEncoder().encode(overrides.lock ?? LOCK) : new TextEncoder().encode(`content of ${name}`)); }),
   };
   const engine: Engine<PackageLoader> = {
@@ -78,10 +83,12 @@ function fixture(packages: readonly string[], overrides: Overrides = {}): Fixtur
           if (overrides.failPackages !== undefined) throw overrides.failPackages;
           return [];
         },
+        unpackArchive: (buffer: Uint8Array, format: string, unpackOptions: { extractDir: string }) => { unpacked.push(`${format} ${unpackOptions.extractDir}: ${new TextDecoder().decode(buffer)}`); },
+        runPython: (code: string) => { events.push(`runPython ${code.split("\n")[1] ?? ""}`); return overrides.sitePackages === undefined ? "/lib/python3.14/site-packages" : overrides.sitePackages; },
       };
     },
   };
-  return { request, engine, asked, compiled, events, options, loaded, logs, scope, wasm, network, fetchedByLoad };
+  return { request, engine, asked, compiled, events, options, loaded, logs, scope, wasm, network, fetchedByLoad, unpacked };
 }
 
 async function failure(work: Promise<unknown>): Promise<unknown> {
@@ -206,24 +213,35 @@ describe("loadPython", () => {
   });
 });
 
-describe("install, when a program imports a package", () => {
-  it("loads the package and what it needs from the verified copies, and answers with every package loaded so far", async () => {
-    const f = fixture(["six"], { fetchOnLoad: [WHEELS.numpy, WHEELS.six, WHEELS.pandas] });
+describe("installSync, when a program imports a package", () => {
+  it("unpacks the package and what it needs, not yet loaded, from the verified copies read synchronously", async () => {
+    const f = fixture(["six"]);
     const loaded = await loadPython(f.request, f.engine);
-    expect(await loaded.install(["numpy"])).toEqual(["numpy", "six"]);
-    expect(f.loaded).toEqual([["six"], ["numpy"]]);
-    // While numpy loads, its wheel is served, and nothing it does not need.
-    expect(f.fetchedByLoad[1]).toEqual([`${WHEELS.numpy}: content of ${WHEELS.numpy}`, `${WHEELS.six}: refused`, `${WHEELS.pandas}: refused`]);
+    expect(loaded.installSync(["pandas"])).toEqual(["numpy", "pandas", "python-dateutil", "six"]);
+    // six was preloaded; the others are unpacked once, into site-packages, without Pyodide's asynchronous loadPackage.
+    expect([...f.unpacked].sort()).toEqual([WHEELS.pandas, WHEELS.numpy, WHEELS["python-dateutil"]].map(wheel => `wheel /lib/python3.14/site-packages: content of ${wheel}`).sort());
+    expect(f.loaded).toEqual([["six"]]);
+    expect(loaded.installSync(["numpy"])).toEqual(["numpy", "pandas", "python-dateutil", "six"]);
+    expect(f.unpacked).toHaveLength(3);
+    expect(f.events.filter(event => event.startsWith("runPython"))).toHaveLength(1);
   });
 
-  it("refuses a package the release does not carry before anything is read, and leaves fetch as it was", async () => {
+  it("refuses a package the release does not carry before anything is read", async () => {
     const f = fixture([]);
     const loaded = await loadPython(f.request, f.engine);
-    const before = f.scope.fetch, asked = f.asked.length;
-    expect(await failure(loaded.install(["scipy"]))).toBeInstanceOf(ModuleError);
+    const asked = f.asked.length;
+    expect(() => loaded.installSync(["scipy"])).toThrow(ModuleError);
     expect(f.asked).toHaveLength(asked);
-    expect(f.scope.fetch).toBe(before);
-    expect(f.loaded).toEqual([]);
+    expect(f.unpacked).toEqual([]);
+  });
+
+  it("fails when Pyodide does not say where its site-packages are", async () => {
+    const f = fixture([], { sitePackages: 42 });
+    const loaded = await loadPython(f.request, f.engine);
+    let thrown: unknown;
+    try { loaded.installSync(["six"]); } catch (error: unknown) { thrown = error; }
+    expect(thrown instanceof ModuleError ? thrown.code : thrown).toBe("package-install");
+    expect(f.unpacked).toEqual([]);
   });
 
   it("maps top-level modules to the shipped packages that provide them, from the lock", async () => {

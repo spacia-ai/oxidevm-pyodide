@@ -1,4 +1,4 @@
-import { check, encoder, sleep } from "./support.ts";
+import { check, encoder, exitShell, sleep } from "./support.ts";
 import type { Context } from "./support.ts";
 import { Capture } from "./support.ts";
 
@@ -118,8 +118,7 @@ export async function internetInterruptRecv(context: Context): Promise<string> {
   await output.waitFor("s2=");
   await sleep(300);
   const shown = output.text;
-  await writer.write(encoder.encode("exit\n"));
-  await handle.exit;
+  await exitShell(handle, writer, () => output.text);
   check(shown.includes("s2=130") && shown.includes("connection.recv(10)"), `Ctrl+C during an internet recv: ${JSON.stringify(shown.slice(-800))}`);
   return "Ctrl+C during a recv from a silent internet server raised KeyboardInterrupt and ended python3 by SIGINT (130)";
 }
