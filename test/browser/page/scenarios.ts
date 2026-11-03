@@ -5,6 +5,8 @@ import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
 import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
+import { INTERNET_SCENARIOS } from "./scenarios-internet.ts";
+import type { InternetConfig } from "./scenarios-internet.ts";
 import { NETWORK_SCENARIOS } from "./scenarios-network.ts";
 import { sockets } from "./scenarios-sockets.ts";
 import type { Context } from "./support.ts";
@@ -14,6 +16,8 @@ export interface ScenarioConfig {
   readonly image: { readonly manifestUrl: string; readonly manifestSHA256: string; readonly trust: { readonly algorithm: "Ed25519"; readonly keyId: string; readonly publicKey: string } };
   /** Run only the scenarios whose name contains this text. */
   readonly only?: string;
+  /** The relay test peer and the test root: the internet scenarios run only with them (`--internet`). */
+  readonly internet?: InternetConfig;
 }
 
 export interface ScenarioResult {
@@ -74,7 +78,7 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
   try {
     record({ name: "boot", ok: true, detail: `Userspace VM ready in ${String(Math.round(performance.now() - booting))} ms` });
     await vm.workspace.createDirectory("_oxidevm").catch(() => undefined);
-    const context: Context = { vm, pyodide, openVM: () => openVM(config), ...(commands === undefined ? {} : { commands }) };
+    const context: Context = { vm, pyodide, openVM: () => openVM(config), ...(commands === undefined ? {} : { commands }), ...(config.internet === undefined ? {} : { internet: config.internet }) };
     const selected = (name: string): boolean => config.only === undefined || name.includes(config.only);
     const attempt = async (name: string, run: (given: Context) => Promise<string>, given: Context): Promise<void> => {
       try {
@@ -86,7 +90,8 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
     for (const [name, run] of SCENARIOS) if (selected(name)) await attempt(name, run, context);
     // Every command scenario needs the commands on, or the shell finds the image's own python3 and the scenario tests
     // that instead of the module: enabling runs whenever any of them is selected, and without it none of them runs.
-    const commandScenarios = [...COMMAND_SCENARIOS.slice(0, -1), ...NETWORK_SCENARIOS, ...COMMAND_SCENARIOS.slice(-1)].filter(([name]) => selected(name));
+    const internet = config.internet === undefined ? [] : INTERNET_SCENARIOS;
+    const commandScenarios = [...COMMAND_SCENARIOS.slice(0, -1), ...NETWORK_SCENARIOS, ...internet, ...COMMAND_SCENARIOS.slice(-1)].filter(([name]) => selected(name));
     let enabled: EnabledCommands | undefined;
     if (selected(ENABLE) || commandScenarios.length > 0) {
       await attempt(ENABLE, async given => {

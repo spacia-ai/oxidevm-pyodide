@@ -285,6 +285,7 @@ The unit tests need a Node with WebAssembly JSPI (Node 26, or Node 24 with `--ex
 | `src/workspace-fs.ts` | Emscripten's file system over the VM's synchronous file API, and which trees Python sees |
 | `src/native-bridge.ts`, `src/socket-bridge.ts`, `src/python/` | `oxidevm.run`, `connect_unix`, `connect_tcp`, and the Python sources |
 | `src/net-bridge.ts`, `src/x509.ts`, `src/python/socket-patch.ts`, `src/python/ssl-patch.ts`, `scripts/record-cpython-net.py` | Python's network through the VM, and CPython's own behaviour that it is tested against |
+| `test/browser/relay/` | the relay test peer (from the SDK) and the throwaway PKI of the internet scenarios (`--internet`) |
 | `src/script.ts`, `src/guest.ts`, `src/stdio.ts` | running the program, process identity, standard streams |
 | `upstream/lock.json`, `scripts/fetch-upstream.ts` | what is mirrored, and how |
 | `legal/`, `scripts/generate-notices.ts` | pinned licence texts and the generator of `NOTICES.txt` and `SOURCE-OFFER.md` |

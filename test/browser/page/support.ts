@@ -2,6 +2,7 @@ import type { ProcessExit, ProcessHandle, UserspaceVM } from "@oxidevm/sdk";
 import { spawnModule } from "@oxidevm/sdk/wasm";
 import type { ModuleHandle } from "@oxidevm/sdk/wasm";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
+import type { InternetConfig } from "./scenarios-internet.ts";
 
 /** What a scenario works with: the booted VM and the installed module, and its commands once they are on. */
 export interface Context {
@@ -13,6 +14,8 @@ export interface Context {
   readonly enabledCommands?: EnabledCommands;
   /** Boots another VM like `vm`, for a scenario that needs one whose module files were never checked. */
   readonly openVM?: () => Promise<UserspaceVM>;
+  /** The relay test peer and the test root, when the harness runs the internet scenarios (`--internet`). */
+  readonly internet?: InternetConfig;
 }
 
 export const decoder = new TextDecoder();

@@ -11,7 +11,9 @@
 //
 // Optional: OXIDEVM_ENGINE_DIR, OXIDEVM_ENGINE_COMPLIANCE_DIR (default: ~/.cache/oxidevm/engine/...), OXIDEVM_VERBOSE=1
 // (page console output), --only <text> (run the scenarios whose name contains it), --keep (keep the scratch directory),
-// --no-build (use the existing dist/). The results go to .cache/test-results/pyodide-browser.json, and the server's log
+// --no-build (use the existing dist/), --internet (also start a throwaway PKI, HTTPS servers and the relay test peer of
+// test/browser/relay/, and run the internet scenarios through it), --repeat <n> (run the selected scenarios n times, each
+// in a fresh page and VM, and count). The results go to .cache/test-results/pyodide-browser.json, and the server's log
 // (every path requested, in order) to pyodide-browser-requests.txt beside it.
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
@@ -24,6 +26,8 @@ import { parseArgs, promisify } from "node:util";
 import { decodeProjectConfig, getSDKRelease, pinnedEngineCompliance } from "@oxidevm/sdk/image-builder";
 import { chromium } from "playwright-core";
 import { build } from "vite";
+import { relayIdentity, startInternet } from "./relay/internet.ts";
+import { startRelayTestPeer } from "./relay/peer.ts";
 
 const execute = promisify(execFile);
 const root = resolve(import.meta.dirname, "../..");
@@ -190,6 +194,9 @@ export interface Options {
   readonly only?: string;
   readonly keep: boolean;
   readonly build: boolean;
+  readonly internet: boolean;
+  /** How many times to run the selected scenarios, each time in a fresh page and VM. */
+  readonly repeat: number;
 }
 
 /** Runs the whole pipeline and returns the scenario results. The scratch directory is removed unless `keep` is set. */
@@ -210,23 +217,36 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
     const imagePrefix = `${dirname(new URL(reference.manifestUrl, "http://x").pathname)}/`;
     served = await serve({ inputs, page, imagePrefix, frameHeaders: await moduleFrameHeaders() });
     const image = { manifestUrl: new URL(reference.manifestUrl, served.origin).href, manifestSHA256: reference.manifestSHA256, trust: reference.trust };
+    const internet = options.internet ? await startInternet() : undefined;
+    const relay = internet === undefined ? undefined : await startRelayTestPeer(await relayIdentity(), internet.routes, internet.dns);
     const browser = await chromium.launch({ headless: true, args: ["--js-flags=--experimental-wasm-return-call"] });
     try {
-      const tab = await browser.newPage();
-      tab.setDefaultTimeout(0);
-      tab.on("console", message => { if (process.env["OXIDEVM_VERBOSE"] !== undefined) process.stderr.write(`browser: ${message.text()}\n`); });
-      tab.on("pageerror", error => { process.stderr.write(`page error: ${error.message}\n`); });
-      await tab.exposeFunction("oxidevmReport", (value: unknown) => { decodeResults([value]).forEach(show); });
-      await tab.goto(`${served.origin}/page/index.html`);
-      const value: unknown = await tab.evaluate(async (input: { origin: string; image: typeof image; only?: string }) => {
-        const run: unknown = Reflect.get(window, "runModuleScenarios");
-        if (typeof run !== "function") throw new Error("The page did not register runModuleScenarios");
-        const outcome: unknown = await Reflect.apply(run, undefined, [input]);
-        return outcome;
-      }, { origin: served.origin, image, ...(options.only === undefined ? {} : { only: options.only }) });
-      return { results: decodeResults(value), browser: `chromium ${browser.version()}`, requests: served.requests };
+      // The relay's own certificate is self-signed for 127.0.0.1: only the browser-to-relay hop accepts it. Python's TLS
+      // verifies in the engine against the VM's store and the test root the program loads.
+      const context = await browser.newContext({ ignoreHTTPSErrors: relay !== undefined });
+      const results: Scenario[] = [];
+      for (let round = 1; round <= options.repeat; round++) {
+        const tab = await context.newPage();
+        tab.setDefaultTimeout(0);
+        tab.on("console", message => { if (process.env["OXIDEVM_VERBOSE"] !== undefined) process.stderr.write(`browser: ${message.text()}\n`); });
+        tab.on("pageerror", error => { process.stderr.write(`page error: ${error.message}\n`); });
+        await tab.exposeFunction("oxidevmReport", (value: unknown) => { decodeResults([value]).forEach(show); });
+        await tab.goto(`${served.origin}/page/index.html`);
+        if (options.repeat > 1) process.stdout.write(`-- round ${String(round)} of ${String(options.repeat)}\n`);
+        const value: unknown = await tab.evaluate(async (input: { origin: string; image: typeof image; only?: string; internet?: { relayUrl: string; root: string } }) => {
+          const run: unknown = Reflect.get(window, "runModuleScenarios");
+          if (typeof run !== "function") throw new Error("The page did not register runModuleScenarios");
+          const outcome: unknown = await Reflect.apply(run, undefined, [input]);
+          return outcome;
+        }, { origin: served.origin, image, ...(options.only === undefined ? {} : { only: options.only }), ...(relay === undefined || internet === undefined ? {} : { internet: { relayUrl: relay.url, root: internet.root } }) });
+        results.push(...decodeResults(value).map(result => (options.repeat > 1 ? { ...result, name: `[${String(round)}] ${result.name}` } : result)));
+        await tab.close();
+      }
+      return { results, browser: `chromium ${browser.version()}`, requests: served.requests };
     } finally {
       await browser.close();
+      await relay?.close();
+      await internet?.close();
     }
   } finally {
     await served?.close();
@@ -235,9 +255,11 @@ export async function runBrowserTest(options: Options): Promise<{ readonly resul
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { only: { type: "string" }, keep: { type: "boolean" }, "no-build": { type: "boolean" } }, strict: true });
+  const { values } = parseArgs({ options: { only: { type: "string" }, keep: { type: "boolean" }, "no-build": { type: "boolean" }, internet: { type: "boolean" }, repeat: { type: "string" } }, strict: true });
   try {
-    const { results, browser, requests } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, ...(values.only === undefined ? {} : { only: values.only }) });
+    const repeat = Number(values.repeat ?? "1");
+    if (!Number.isSafeInteger(repeat) || repeat < 1) throw new Error("--repeat takes a whole number of rounds");
+    const { results, browser, requests } = await runBrowserTest({ keep: values.keep === true, build: values["no-build"] !== true, internet: values.internet === true, repeat, ...(values.only === undefined ? {} : { only: values.only }) });
     const failed = results.filter(result => !result.ok).length;
     await mkdir(join(root, ".cache/test-results"), { recursive: true });
     await writeFile(join(root, ".cache/test-results/pyodide-browser.json"), `${JSON.stringify({ browser, results }, null, 2)}\n`);
