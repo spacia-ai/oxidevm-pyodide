@@ -27,7 +27,7 @@ describe("the manifest", () => {
     expect(manifest.commands).toEqual(["python", "python3"]);
     expect([...manifest.commands]).toEqual([...COMMANDS]);
     expect([...COMMANDS]).toEqual([...COMMANDS].sort());
-    expect(manifest.version).toBe("0.2.0");
+    expect(manifest.version).toBe("0.3.0");
   });
 
   it("needs the engine that enforces network reach (Userspace API 146), which also runs module commands and process.signals", () => {

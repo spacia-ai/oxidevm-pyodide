@@ -7,13 +7,14 @@ them, starts native programs, and talks to services they listen with. pandas and
 start it, or turn on its commands, `python3` and `python`, so that shells, scripts and other programs of the VM run it from
 their PATH like any program.
 
-Status: pre-release `0.2.0`, built on the SDK 0.0.9 (Userspace API 145), which serves module commands and the
-`process.signals` capability (engine ADR 0027). See [Known limits](#known-limits) and [Changes in 0.2.0](#changes-in-020).
+Status: pre-release `0.3.0`, built on the SDK 0.0.12 (Userspace API 146), which runs modules in an isolated module frame
+(engine ADR 0028) and carries the module networking standard (engine ADR 0029). See [Known limits](#known-limits) and
+[Changes in 0.3.0](#changes-in-030).
 
 ## Use it
 
 ```sh
-oxidevm wasm add github:spacia-ai/oxidevm-pyodide@v0.2.0
+oxidevm wasm add github:spacia-ai/oxidevm-pyodide@v0.3.0
 ```
 
 The command shows what the module declares and asks before it installs anything. A module is code that runs in a worker of
@@ -303,17 +304,44 @@ Publishing changes what others can install, so it goes draft, verify, publish: t
 against its own `SHA256SUMS` before it becomes visible. The tag must name the version in `module.ts`.
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 pnpm run build
-gh release create v0.2.0 dist/* --draft --verify-tag --title v0.2.0
-gh release download v0.2.0 --dir verify && (cd verify && sha256sum --check SHA256SUMS)
-gh release edit v0.2.0 --draft=false
+gh release create v0.3.0 dist/* --draft --verify-tag --title v0.3.0
+gh release download v0.3.0 --dir verify && (cd verify && sha256sum --check SHA256SUMS)
+gh release edit v0.3.0 --draft=false
 ```
 
 `pnpm run release` (`oxidevm wasm release --repo spacia-ai/oxidevm-pyodide`) prints these steps and runs none of them. The
 `release` workflow does the same in GitHub Actions, in two jobs: a read-only one fetches the upstream files and builds, and a
 second one, which installs nothing, drafts, verifies and publishes. The `ci` workflow runs on pushes to `main` and on pull
 requests, and `release` runs when a `v*` tag is pushed.
+
+## Changes in 0.3.0
+
+0.3.0 needs `@oxidevm/sdk` 0.0.12 or later (Userspace API 146). 0.0.12 is the first public SDK with the module frame and
+the networking standard; the versions 0.0.10 and 0.0.11 were never published. Installing 0.3.0 asks for consent again,
+because the module now declares network reach.
+
+- **Network: internet.** The module declares `net.internet` with `sockets.connect` and the purpose "Python programs reach
+  the internet through the VM". Python's `socket`, `ssl`, `http.client`, `urllib.request` and the shipped `requests`
+  (with `urllib3`) and `httpx` go through the VM's sockets and resolver, and TLS verifies against the VM's
+  `/etc/ssl/cert.pem`; see [Network](#network). Before the VM is connected through a relay, they fail as CPython does
+  when the system refuses a connection (`PermissionError`).
+- **Interactive interpreter.** With no program on a terminal, or after the program with `-i`, CPython's basic REPL runs:
+  prompts on standard error, Ctrl+C back to the prompt, end of input exits with 0; `-q` hides the banner.
+- **`-m module`** runs a module as `__main__` as CPython does: `sys.argv[0]` is the module's path and the working
+  directory comes first on `sys.path`; a bare `-m` exits with 2 and a missing module with 1 and CPython's message.
+- **Packages load on import.** `packages` is now a preload list and defaults to `[]` (0.2.0 preloaded pandas and
+  Matplotlib on every run); a program that imports numpy, pandas, PIL (pillow), Matplotlib, requests or httpx gets the
+  shipped wheel unpacked from the release's verified copy when it imports it. Added wheels: certifi,
+  charset-normalizer, h11, httpcore, httpx, idna, requests and urllib3.
+- **One compile per VM.** `pyodide.asm.wasm` is compiled once for the VM and reused by later runs.
+- **WebAssembly JSPI is optional.** `jspi` is no longer in `requires.browser`. `time.sleep`, imports and Python's own
+  network work without it, so default Firefox runs Python; only the `oxidevm` module's `run`, `connect_unix` and
+  `connect_tcp` need it and otherwise raise `OSError(errno.ENOTSUP)` before anything starts.
+- **Ctrl+C** is taken out of the interrupt buffer in one atomic step, so one written while the interpreter polls is no
+  longer lost.
+- **Module frame.** The module runs quietly in the SDK's isolated module frame (no classic-worker probe, no blob frames).
 
 ## Changes in 0.2.0
 

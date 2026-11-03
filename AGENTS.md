@@ -60,8 +60,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
   `test:conformance` starts the module as `-c pass`: a start without a program reads one from standard input, which
   `oxidevm wasm test` leaves open, so it would never end.
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.9, Userspace API 145, which module commands and
-  `process.signals` need; `files.sync` and `files.async` need 144 for `utimes`) and installed from npm. The committed
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.12, Userspace API 146: the module frame, `net.internet`,
+  `kit.emscripten.network` and `kit.tls` need it; module commands and `process.signals` need 145, and `files.sync` and
+  `files.async` 144 for `utimes`) and installed from npm. The committed
   `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's minimum-release-age
   policy.
 - To develop against an SDK that is not published yet, use a local build of the SDK repository:

@@ -5,7 +5,7 @@ import { createCommand } from "./src/command.ts";
 export default defineModule({
   manifest: {
     id: "pyodide",
-    version: "0.2.0",
+    version: "0.3.0",
     abi: "emscripten",
     artifacts: [
       { name: "pyodide.asm.wasm", from: "upstream/pyodide.asm.wasm" },
