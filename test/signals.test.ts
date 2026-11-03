@@ -2,10 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Worker } from "node:worker_threads";
 import { LinuxError } from "@oxidevm/sdk/js-process";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PYTHON_VERSION } from "../src/cli.ts";
 import { ModuleError } from "../src/errors.ts";
-import { catchInterrupts, createInterrupts, endBySignal, SLEEP_POLL_MS } from "../src/signals.ts";
+import { catchInterrupts, createInterrupts, endBySignal, SIGNAL_POLL_IMPORT, SLEEP_POLL_MS, takeSignal, useAtomicSignalPoll } from "../src/signals.ts";
 import { normalised, oracle, oracleCase, oracleFiles } from "./support/cpython-oracle.ts";
 import { fakeSignals } from "./support/fake-signals.ts";
 import { startGuest } from "./support/guest-fixture.ts";
@@ -35,7 +35,7 @@ describe("catchInterrupts", () => {
     const pyodide = interruptTarget();
     const trap = await catchInterrupts(fake.signals, interrupts);
     expect(fake.calls).toEqual(["trap SIGINT"]);
-    expect(trap.signals).toEqual(["SIGINT"]);
+    expect(trap.interruptBuffer).toBe(fake.buffer);
     fake.buffer[0] = 2;
     interrupts.hold();
     expect(fake.buffer[0]).toBe(0);
@@ -79,19 +79,28 @@ describe("createInterrupts", () => {
     expect(buffer[0]).toBe(15);
   });
 
-  it("sleeps for the time asked, and ends a sleep as soon as a Ctrl+C is pending, holding it", async () => {
-    const interrupts = createInterrupts(), buffer = new Int32Array(1);
-    interrupts.attach(buffer);
-    let began = performance.now();
-    await interrupts.sleep(60);
-    expect(performance.now() - began).toBeGreaterThanOrEqual(55);
-    began = performance.now();
-    setTimeout(() => { buffer[0] = 2; }, 30);
-    await interrupts.sleep(10_000);
-    expect(performance.now() - began).toBeLessThan(30 + 10 * SLEEP_POLL_MS);
-    expect(buffer[0]).toBe(0);
-    interrupts.restore();
-    expect(buffer[0]).toBe(2);
+  it("blocks for the time asked, and ends a sleep as soon as a Ctrl+C is pending, holding it, without JSPI", () => {
+    for (const buffer of [new Int32Array(new SharedArrayBuffer(4)), new Int32Array(1)]) {
+      const interrupts = createInterrupts();
+      interrupts.attach(buffer);
+      let began = performance.now();
+      interrupts.sleepSync(60);
+      expect(performance.now() - began).toBeGreaterThanOrEqual(55);
+      began = performance.now();
+      // Another thread writes the signal, as the runtime does, while this one is blocked.
+      const shared = buffer.buffer instanceof SharedArrayBuffer ? buffer : undefined;
+      if (shared !== undefined) interruptFromAnotherThread(shared, 30);
+      else buffer[0] = 2;
+      interrupts.sleepSync(10_000);
+      expect(performance.now() - began).toBeLessThan(5_000);
+      expect(buffer[0]).toBe(0);
+      interrupts.restore();
+      expect(buffer[0]).toBe(2);
+    }
+    const unattached = createInterrupts(), began = performance.now();
+    unattached.sleepSync(25);
+    expect(performance.now() - began).toBeGreaterThanOrEqual(20);
+    expect(SLEEP_POLL_MS).toBe(20);
   });
 });
 
@@ -108,6 +117,48 @@ describe("endBySignal", () => {
     const fake = fakeSignals();
     const trap = await fake.signals.trap(["SIGINT"]);
     await expect(endBySignal({ ...fake.signals, raise: () => Promise.resolve() }, trap)).rejects.toThrow(ModuleError);
+  });
+});
+
+describe("the interpreter's signal poll", () => {
+  it("takes a pending signal out of the buffer in one exchange, and finds none in anything but an integer array", () => {
+    const buffer = new Int32Array(new SharedArrayBuffer(4));
+    buffer[0] = 2;
+    const exchange = vi.spyOn(Atomics, "exchange");
+    try {
+      expect(takeSignal(buffer)).toBe(2);
+      expect(exchange.mock.calls).toEqual([[buffer, 0, 0]]);
+    } finally { exchange.mockRestore(); }
+    expect(buffer[0]).toBe(0);
+    expect(takeSignal(buffer)).toBe(0);
+    const bytes = Uint8Array.of(2);
+    expect(takeSignal(bytes)).toBe(2);
+    for (const nothing of [undefined, null, 2, [2], new Float64Array([2])]) expect(takeSignal(nothing)).toBe(0);
+  });
+
+  it("replaces the interpreter's poll with one that takes the signal from the buffer Pyodide stores on the module", () => {
+    const original = (): number => 99;
+    const env: Record<string, unknown> = { [SIGNAL_POLL_IMPORT]: original, other: original };
+    const module = {};
+    useAtomicSignalPoll({ env }, module);
+    const replaced: unknown = env[SIGNAL_POLL_IMPORT];
+    expect(replaced).not.toBe(original);
+    expect(env["other"]).toBe(original);
+    if (typeof replaced !== "function") throw new Error("no poll");
+    const poll = (): unknown => Reflect.apply(replaced, undefined, []);
+    expect(poll()).toBe(0);
+    const buffer = new Int32Array(1);
+    Reflect.set(module, "Py_EmscriptenSignalBuffer", buffer);
+    buffer[0] = 2;
+    expect([poll(), buffer[0]]).toEqual([2, 0]);
+  });
+
+  it("refuses an interpreter that does not import the poll", () => {
+    for (const imports of [{}, { env: null }, { env: {} }, { env: { [SIGNAL_POLL_IMPORT]: 1 } }]) {
+      let thrown: unknown;
+      try { useAtomicSignalPoll(imports, {}); } catch (error: unknown) { thrown = error; }
+      expect(thrown instanceof ModuleError ? thrown.code : thrown).toBe("interpreter-imports");
+    }
   });
 });
 
@@ -147,6 +198,24 @@ describe("Ctrl+C in the program", () => {
       .toEqual({ status: "SIGINT", stdout: normalised(recorded.stdout, module), stderr: normalised(recorded.stderr, module) });
   });
 
+  it("polls the buffer with one atomic exchange in the real interpreter, so that a Ctrl+C written meanwhile is kept", () => {
+    // Pyodide's own poll reads the word, then writes 0: a SIGINT the runtime writes between the two is lost.
+    guest.py.setInterruptBuffer(guest.interrupts);
+    guest.interrupts[0] = 2;
+    const exchange = vi.spyOn(Atomics, "exchange");
+    try {
+      expect(() => { guest.py.checkInterrupt(); }).toThrow(/KeyboardInterrupt/u);
+      const polls = exchange.mock.calls.flatMap((call, index) => (Object.is(call[0], guest.interrupts) ? [[...call, exchange.mock.results[index]?.value]] : []));
+      expect(polls[0]).toEqual([guest.interrupts, 0, 0, 2]);
+      expect(polls.every(poll => poll[1] === 0 && poll[2] === 0)).toBe(true);
+    } finally {
+      exchange.mockRestore();
+      // As the fixture leaves Pyodide after a run: watching a buffer nobody writes.
+      guest.py.setInterruptBuffer(new Int32Array(1));
+    }
+    expect(guest.interrupts[0]).toBe(0);
+  });
+
   it("raises a Ctrl+C that came before the program started as it starts, so that no line of it runs", async () => {
     guest.interrupts[0] = 2;
     expect(await guest.run("print('started')\n")).toEqual({ status: "SIGINT", stdout: "", stderr: "" });
@@ -181,9 +250,18 @@ describe("Ctrl+C in the program", () => {
     expect(await guest.run("import time\nstart = time.monotonic()\ntime.sleep(0.05)\nprint(time.monotonic() - start >= 0.045, time.sleep.__name__)\n")).toEqual({ status: 0, stdout: "True sleep\n", stderr: "" });
   });
 
-  it("falls back to Pyodide's own sleep where Python cannot wait for JavaScript", () => {
-    const seen: unknown = guest.py.runPython("import json, time\nfrom pyodide.ffi import can_run_sync\nstart = time.monotonic()\ntime.sleep(0.02)\njson.dumps([can_run_sync(), time.monotonic() - start >= 0.015])");
-    expect(seen).toBe("[false, true]");
+  it("sleeps, and Ctrl+C ends the sleep, where Python cannot wait for JavaScript (no JSPI)", () => {
+    const seen: unknown = guest.py.runPython("import json, time\nfrom pyodide.ffi import can_run_sync\nstart = time.monotonic()\ntime.sleep(0.02)\njson.dumps([can_run_sync(), time.monotonic() - start >= 0.015, time.sleep.__module__])");
+    expect(seen).toBe('[false, true, "time"]');
+    guest.py.setInterruptBuffer(guest.interrupts);
+    interruptFromAnotherThread(guest.interrupts, 30);
+    const began = performance.now();
+    try {
+      expect(() => { guest.py.runPython("import time\ntime.sleep(60)"); }).toThrow(/KeyboardInterrupt/u);
+    } finally {
+      guest.py.setInterruptBuffer(new Int32Array(1));
+    }
+    expect(performance.now() - began).toBeLessThan(10_000);
   });
 
   it("interrupts a read of standard input that the signal ended with EINTR", async () => {
@@ -287,7 +365,7 @@ describe("Ctrl+C in the program", () => {
   });
 
   it("returns at once from a sleep of the bridge that is not given a number of milliseconds", async () => {
-    expect(await guest.run("import _oxidevm_bridge\nfrom pyodide.ffi import run_sync\nfor value in ('soon', None, -5, float('nan')):\n    run_sync(_oxidevm_bridge.sleep(value))\nprint('returned')\n"))
+    expect(await guest.run("import _oxidevm_bridge\nfor value in ('soon', None, -5, float('nan')):\n    _oxidevm_bridge.sleep(value)\nprint('returned')\n"))
       .toEqual({ status: 0, stdout: "returned\n", stderr: "" });
   });
 

@@ -1,6 +1,38 @@
 import type { ProcessSignals, SignalTrap } from "@oxidevm/sdk/wasm";
 import { ModuleError } from "./errors.ts";
 
+/** The JavaScript function, imported by Pyodide's interpreter, with which CPython polls the interrupt buffer. */
+export const SIGNAL_POLL_IMPORT = "_Py_CheckEmscriptenSignals_Helper";
+
+/** The integer arrays `Atomics` works on that a Pyodide interrupt buffer can be. */
+function isAtomicBuffer(value: unknown): value is Int32Array | Int16Array | Int8Array | Uint32Array | Uint16Array | Uint8Array {
+  return value instanceof Int32Array || value instanceof Int16Array || value instanceof Int8Array
+    || value instanceof Uint32Array || value instanceof Uint16Array || value instanceof Uint8Array;
+}
+
+/**
+ * Takes the pending signal out of an interrupt buffer in one step and returns it, or 0. Pyodide's own poll reads the
+ * buffer and then writes 0 to it, so a Ctrl+C that the runtime writes between the two is lost; an exchange cannot lose
+ * one. Like Pyodide's poll, anything that is not an integer array holds no signal.
+ */
+export function takeSignal(buffer: unknown): number {
+  return isAtomicBuffer(buffer) ? Atomics.exchange(buffer, 0, 0) : 0;
+}
+
+/**
+ * Replaces the interpreter's import `SIGNAL_POLL_IMPORT` with one that takes the signal (`takeSignal`) from the buffer
+ * that Pyodide's `setInterruptBuffer` stores on `module`, the settings object its Emscripten factory was given. Call it
+ * on the interpreter's imports before it is instantiated (`withPreparedImports` in src/python-loader.ts); Pyodide's files
+ * stay unmodified. An interpreter that does not import the poll is refused rather than run with one that loses Ctrl+C.
+ */
+export function useAtomicSignalPoll(imports: Readonly<Record<string, unknown>>, module: object): void {
+  const env: unknown = imports["env"];
+  if (typeof env !== "object" || env === null || typeof Reflect.get(env, SIGNAL_POLL_IMPORT) !== "function") {
+    throw new ModuleError("interpreter-imports", `Pyodide's interpreter imports no ${SIGNAL_POLL_IMPORT}`);
+  }
+  Reflect.set(env, SIGNAL_POLL_IMPORT, () => takeSignal(Reflect.get(module, "Py_EmscriptenSignalBuffer")));
+}
+
 /** What Ctrl+C needs of Pyodide: the buffer its interpreter polls for signals, and a check of it now. */
 export interface InterruptTarget {
   setInterruptBuffer(buffer: Int32Array): void;
@@ -28,8 +60,11 @@ export interface Interrupts {
   hold(): void;
   /** Puts a held Ctrl+C back, unless a newer one is already waiting. */
   restore(): void;
-  /** Waits for the time to pass, or until a Ctrl+C is pending, which it holds. */
-  sleep(milliseconds: number): Promise<void>;
+  /**
+   * Blocks the module's worker until the time has passed, or until a Ctrl+C is pending, which it holds. It waits with
+   * `Atomics.wait` in slices of `SLEEP_POLL_MS`, so it needs no WebAssembly JSPI.
+   */
+  sleepSync(milliseconds: number): void;
 }
 
 export function createInterrupts(): Interrupts {
@@ -52,15 +87,16 @@ export function createInterrupts(): Interrupts {
       if (buffer !== undefined && held !== 0) Atomics.compareExchange(buffer, 0, 0, held);
       held = 0;
     },
-    sleep: milliseconds => new Promise<void>(resolve => {
+    sleepSync: milliseconds => {
       const deadline = Date.now() + milliseconds;
-      const tick = (): void => {
+      // The interrupt buffer itself when it is shared, so that a runtime that notifies it ends the wait at once.
+      const cell = buffer?.buffer instanceof SharedArrayBuffer ? buffer : new Int32Array(new SharedArrayBuffer(4));
+      for (;;) {
         const left = deadline - Date.now();
-        if (pending() || left <= 0) { hold(); resolve(); return; }
-        setTimeout(tick, Math.min(left, SLEEP_POLL_MS));
-      };
-      tick();
-    }),
+        if (pending() || left <= 0) { hold(); return; }
+        Atomics.wait(cell, 0, 0, Math.min(left, SLEEP_POLL_MS));
+      }
+    },
   };
 }
 

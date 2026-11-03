@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { decodeLockfile, wheelsFor } from "../src/lock.ts";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { decodeLockfile, importMap, wheelsFor } from "../src/lock.ts";
+import { isWheelFile } from "../src/shipped.ts";
 
 const LOCK = JSON.stringify({
   info: { abi_version: "2026_0" },
   packages: {
-    pandas: { name: "pandas", file_name: "pandas-3.whl", depends: ["numpy", "python-dateutil"], sha256: "x" },
+    pandas: { name: "pandas", file_name: "pandas-3.whl", depends: ["numpy", "python-dateutil"], imports: ["pandas"], sha256: "x" },
     numpy: { name: "numpy", file_name: "numpy-2.whl", depends: [] },
     "python-dateutil": { name: "python-dateutil", file_name: "python_dateutil-2.whl", depends: ["six"] },
     six: { file_name: "six-1.whl" },
@@ -26,8 +30,8 @@ describe("decodeLockfile", () => {
   it("reads the file names and dependencies of every package", () => {
     const lock = decodeLockfile(LOCK);
     expect([...lock.keys()].sort()).toEqual(["loop", "matplotlib", "numpy", "pandas", "python-dateutil", "six"]);
-    expect(lock.get("pandas")).toEqual({ name: "pandas", fileName: "pandas-3.whl", depends: ["numpy", "python-dateutil"] });
-    expect(lock.get("six")).toEqual({ name: "six", fileName: "six-1.whl", depends: [] });
+    expect(lock.get("pandas")).toEqual({ name: "pandas", fileName: "pandas-3.whl", depends: ["numpy", "python-dateutil"], imports: ["pandas"] });
+    expect(lock.get("six")).toEqual({ name: "six", fileName: "six-1.whl", depends: [], imports: [] });
   });
 
   it("refuses text that is not a Pyodide lock", () => {
@@ -69,5 +73,23 @@ describe("wheelsFor", () => {
     expect(failure(() => wheelsFor(decodeLockfile(LOCK), ["scipy"]))).toContain("scipy");
     const broken = decodeLockfile(JSON.stringify({ packages: { a: { file_name: "a.whl", depends: ["missing"] } } }));
     expect(failure(() => wheelsFor(broken, ["a"]))).toContain("missing");
+  });
+});
+
+describe("importMap", () => {
+  it("maps the top-level modules of Pyodide's real lock to the packages this release ships, PIL to pillow and pylab to matplotlib", async () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const lock = decodeLockfile(await readFile(join(root, "upstream/pyodide-lock.json"), "utf8"));
+    const map = importMap(lock, isWheelFile);
+    expect([map.get("PIL"), map.get("pylab"), map.get("mpl_toolkits"), map.get("matplotlib"), map.get("dateutil"), map.get("fontTools"), map.get("numpy")])
+      .toEqual(["pillow", "matplotlib", "matplotlib", "matplotlib", "python-dateutil", "fonttools", "numpy"]);
+    // A package of Pyodide's that the release does not carry does not load on import.
+    expect(map.has("scipy")).toBe(false);
+  });
+
+  it("refuses imports that are not a list of names, and leaves out a name two shipped packages claim", () => {
+    expect(failure(() => decodeLockfile(JSON.stringify({ packages: { a: { file_name: "a.whl", imports: "a" } } })))).toContain("imports");
+    const lock = decodeLockfile(JSON.stringify({ packages: { a: { file_name: "a.whl", imports: ["shared", "a"] }, b: { file_name: "b.whl", imports: ["shared"] } } }));
+    expect(Object.fromEntries(importMap(lock, () => true))).toEqual({ a: "a" });
   });
 });

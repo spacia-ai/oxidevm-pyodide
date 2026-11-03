@@ -6,9 +6,15 @@ export const RUNTIME_FILES = ["pyodide.asm.wasm", "python_stdlib.zip", "pyodide-
 
 /** The wheels of the packages the module offers, by package name as Pyodide's lock file spells it. */
 export const WHEELS = {
+  certifi: "certifi-2026.4.22-py3-none-any.whl",
+  "charset-normalizer": "charset_normalizer-3.4.7-py3-none-any.whl",
   contourpy: "contourpy-1.3.3-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
   cycler: "cycler-0.12.1-py3-none-any.whl",
   fonttools: "fonttools-4.62.1-py3-none-any.whl",
+  h11: "h11-0.16.0-py3-none-any.whl",
+  httpcore: "httpcore-1.0.9-py3-none-any.whl",
+  httpx: "httpx-0.28.1-py3-none-any.whl",
+  idna: "idna-3.11-py3-none-any.whl",
   kiwisolver: "kiwisolver-1.5.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
   matplotlib: "matplotlib-3.10.8-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
   numpy: "numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
@@ -18,7 +24,9 @@ export const WHEELS = {
   pyparsing: "pyparsing-3.3.2-py3-none-any.whl",
   "python-dateutil": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
   pytz: "pytz-2026.1.post1-py2.py3-none-any.whl",
+  requests: "requests-2.33.1-py3-none-any.whl",
   six: "six-1.17.0-py2.py3-none-any.whl",
+  urllib3: "urllib3-2.6.3-py3-none-any.whl",
 } as const;
 
 /** The commands the module declares (`commands` in the manifest, sorted): both run Python, and argv[0] says which was typed. */

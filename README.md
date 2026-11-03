@@ -7,19 +7,23 @@ them, starts native programs, and talks to services they listen with. pandas and
 start it, or turn on its commands, `python3` and `python`, so that shells, scripts and other programs of the VM run it from
 their PATH like any program.
 
-Status: pre-release `0.2.0`, built on the SDK 0.0.9 (Userspace API 145), which serves module commands and the
-`process.signals` capability (engine ADR 0027). See [Known limits](#known-limits) and [Changes in 0.2.0](#changes-in-020).
+Status: pre-release `0.3.0`, built on the SDK 0.0.12 (Userspace API 146), which runs modules in an isolated module frame
+(engine ADR 0028) and carries the module networking standard (engine ADR 0029). See [Known limits](#known-limits) and
+[Changes in 0.3.0](#changes-in-030).
 
 ## Use it
 
 ```sh
-oxidevm wasm add github:spacia-ai/oxidevm-pyodide@v0.2.0
+oxidevm wasm add github:spacia-ai/oxidevm-pyodide@v0.3.0
 ```
 
 The command shows what the module declares and asks before it installs anything. A module is code that runs in a worker of
 your page with that authority, so review it as you would a dependency. It needs a self-hosted runtime on a cross-origin
-isolated page and a browser with WebAssembly JSPI (`WebAssembly.Suspending` and `WebAssembly.promising`); without them it exits
-with status 122 and names what is missing.
+isolated page; without it, it exits with status 122 and names what is missing. WebAssembly JSPI (`WebAssembly.Suspending`
+and `WebAssembly.promising`) is used where the browser has it and is not required: Python programs, the REPL, `-m`, packages
+loaded on import, `time.sleep`, Ctrl+C and Python's own network work without it (Firefox ships JSPI only behind a
+preference). Only the `oxidevm` module's `run`, `connect_unix` and `connect_tcp` wait for the VM through it; without it they
+raise `OSError(errno.ENOTSUP)` before anything starts.
 
 ### As commands of the VM
 
@@ -27,7 +31,7 @@ with status 122 and names what is missing.
 import { enableModuleCommands } from "@oxidevm/sdk/wasm";
 import { pyodide } from "./oxidevm.modules.generated";
 
-const python = await enableModuleCommands(vm, pyodide, { commands: ["python3"], options: { packages: ["numpy"] } });
+const python = await enableModuleCommands(vm, pyodide, { commands: ["python3"] });
 // Any program in the VM now runs /usr/local/bin/python3: a shell, a script that starts with #!/usr/bin/env python3,
 // make, another module. A program it does not find there is the image's own, if the image has one.
 const result = await vm.exec({ command: "/bin/sh", args: ["-c", "python3 -c 'import numpy; print(numpy.__version__)'"] });
@@ -38,7 +42,7 @@ Leave out `commands` to turn on both names. `python3` and `python` come before t
 so they replace an image's `/usr/bin/python3` for programs that look it up by name. The application chooses the options
 when it turns the commands on; a program in the VM chooses only the command line, environment, directory and standard
 streams. **Read [Known limits](#known-limits) before turning them on:** a program that runs `python3` runs code in a worker
-of your page's origin, and every run starts Pyodide again, so keep `packages` short.
+of your page's origin, and every run starts Pyodide again and unpacks the packages it imports.
 
 ### Started by the application
 
@@ -58,22 +62,40 @@ Options (typed from the manifest):
 
 | option | values | default |
 | --- | --- | --- |
-| `packages` | any of `contourpy`, `cycler`, `fonttools`, `kiwisolver`, `matplotlib`, `numpy`, `packaging`, `pandas`, `pillow`, `pyparsing`, `python-dateutil`, `pytz`, `six` | `["pandas", "matplotlib"]` |
+| `packages` | any of `contourpy`, `cycler`, `fonttools`, `kiwisolver`, `matplotlib`, `numpy`, `packaging`, `pandas`, `pillow`, `pyparsing`, `python-dateutil`, `pytz`, `six` | `[]` |
 
-The packages (and the ones they need) are unpacked before the program starts. `packages: []` starts the bare interpreter, in
-about a second.
+Every shipped package loads the first time a program imports it (`import numpy`, `import PIL` for pillow, `import pylab`
+for Matplotlib), with the packages it needs, from the release's verified files; nothing is downloaded. `packages` names
+the ones to unpack before the program starts instead: a program that always needs pandas starts it sooner that way, and an
+import where Python cannot wait for the load (inside a callback that JavaScript calls) needs it. Without packages a run
+starts the bare interpreter in about a second. Pyodide's interpreter is compiled once for the VM, when the commands are
+turned on or the module is first started, not again for every run.
 
 ## What the program sees
 
 - **The command line** is read as CPython 3.14 reads its own: `python3 FILE [arg ...]`, `python3 -c CODE [arg ...]`,
-  `python3 - [arg ...]` and `python3` alone, which read the program from standard input (to its end, at most 16 MiB) when
-  standard input is not a terminal. Flags group (`-uc CODE`), and option parsing stops at the file, at `-` and at `--`.
-  `-V` and `--version` print `Python 3.14.2`, `-h` and `--help` print the options. `-u`, `-B`, `-E`, `-s`, `-I`, `-P` and
-  `-q` are accepted and change nothing: `PYTHON*` variables are never passed on, so `-E` and `-I` have nothing to ignore.
-  `-m` and every other option are refused with CPython's own message, the usage line and status 2. When the application
-  starts the module, the same rules apply and the module calls itself `pyodide`.
-- **How it was started**, as CPython reports it: `sys.argv` is the file as typed, `-c` or `-`, then the arguments (`['']`
-  for a program read from standard input without `-`); `sys.orig_argv` is the whole command line; `sys.executable` is the
+  `python3 -m MODULE [arg ...]`, `python3 - [arg ...]` and `python3` alone, which read the program from standard input (to
+  its end, at most 16 MiB) when standard input is not a terminal. Flags group (`-uc CODE`, `-um MODULE`), and option parsing
+  stops at the file, at `-`, at `--` and after `-c` or `-m`. `-V` and `--version` print `Python 3.14.2`, `-h` and `--help`
+  print the options. `-i` starts the interactive interpreter after the program and `-q` leaves out its banner. `-u`, `-B`,
+  `-E`, `-s`, `-I` and `-P` are accepted and change nothing: `PYTHON*` variables are never passed on, so `-E` and `-I` have
+  nothing to ignore. Every other option is refused with CPython's own message, the usage line and status 2. When the
+  application starts the module, the same rules apply and the module calls itself `pyodide`.
+- **`-m MODULE`** runs the module with runpy, as CPython does: the working directory comes first on `sys.path`, `sys.argv[0]`
+  and `__file__` are the module's file (a package runs its `__main__`), and its traceback shows runpy's frames as
+  `<frozen runpy>`. A module that cannot be found prints `<sys.executable>: No module named MODULE` (`pyodide: ...` when the
+  application starts the module) and exits with 1; `-m` without a module is a usage error.
+- **The interactive interpreter** is CPython's basic REPL, the one `PYTHON_BASIC_REPL=1` selects: it starts when standard
+  input is a terminal and there is no program (`python3`, `python3 -`), with `-i` after a program, and with `-i` alone even
+  on a pipe. The VM's terminal edits the line; there is no history and no completion. The banner (unless `-q`) and the
+  prompts `sys.ps1` and `sys.ps2` go to standard error. An expression's value is printed, a compound statement continues
+  until an empty line, an error prints its traceback with the line typed, and the prompt returns. Ctrl+C at a prompt prints
+  `KeyboardInterrupt` and drops the unfinished input; Ctrl+C while an input runs interrupts it. Ctrl+D at the start of a line
+  ends the session with status 0, or killed by SIGINT once a KeyboardInterrupt has been reported in it, as CPython 3.14
+  does; `sys.exit(n)` and `exit(n)` end it with `n`. With `-i`, an error or `SystemExit` of the program prints its
+  traceback and the prompt follows.
+- **How it was started**, as CPython reports it: `sys.argv` is the file as typed, `-c`, the module's file or `-`, then the
+  arguments (`['']` for a program read from standard input without `-`, and at a prompt without a program); `sys.orig_argv` is the whole command line; `sys.executable` is the
   command's path (`/usr/local/bin/python3`, or empty when the application starts the module); the program's name in
   tracebacks is its absolute path, `<string>` or `<stdin>`; `__file__` is the absolute path (`<stdin>` for standard input,
   none for `-c`); `sys.path[0]` is the file's real directory (`''`, the working directory, for `-c` and standard input);
@@ -84,8 +106,11 @@ about a second.
   directory the module cannot use. A KeyboardInterrupt that the program does not handle prints its traceback, runs `atexit`
   and ends the process killed by SIGINT, as CPython does: a shell sees 130 and stops a loop.
 - **Ctrl+C** reaches the program as KeyboardInterrupt while it computes, reads standard input or files, sleeps in
-  `time.sleep` (which this module replaces with one that Ctrl+C ends at once), and waits in `oxidevm.run` or a socket of the
-  `oxidevm` module. A Ctrl+C while Pyodide starts, before the program runs, ends the process at once.
+  `time.sleep` (which this module replaces with one that Ctrl+C ends at once), and waits in `oxidevm.run`, a socket of the
+  `oxidevm` module or a `socket` of Python's. A Ctrl+C while Pyodide starts, before the program runs, ends the process at
+  once. The interpreter takes a Ctrl+C out of its interrupt buffer in one atomic step (Pyodide's own poll reads it and then
+  clears it, and loses a Ctrl+C that arrives in between); the module replaces that one import of the interpreter when it
+  instantiates it, and Pyodide's files stay unmodified.
 - **Standard streams** are the process's descriptors 0, 1 and 2, read and written in UTF-8. `isatty()` and
   `os.get_terminal_size()` answer for them as for a native process, with the size the terminal had when the process
   started.
@@ -144,9 +169,55 @@ with oxidevm.connect_tcp(5432) as connection:             # host defaults to "12
 timeout runs out, `BrokenPipeError` when the other side has gone), and Ctrl+C during a call raises KeyboardInterrupt. A program
 may hold 32 sockets open; the module closes any it leaves open when it ends.
 
+## Network
+
+- **Reach: internet** (`net.internet` with `sockets.connect`, engine ADR 0029). Purpose, as the install review shows it:
+  "Python programs reach the internet through the VM". The module discloses no hosts: a Python program reaches whatever
+  host it asks for, so no list could be complete.
+- **How.** Python's `socket` is Pyodide's Emscripten socket layer connected to the module process's own VM sockets
+  (`kit.emscripten.network`), and names resolve through the VM's resolver (`/etc/hosts`, then the nameservers of
+  `/etc/resolv.conf`). `ssl` runs the engine's TLS client over those sockets and verifies every certificate against the
+  VM's `/etc/ssl/cert.pem`, what `curl` in the image trusts, and the authorities the program adds with
+  `load_verify_locations` (`create_default_context(cafile=...)`, requests' `verify=<file>`). `socket`, `ssl`, `http.client`, `urllib.request` and the
+  shipped `requests` (with `urllib3`) and `httpx` are tested this way; other standard modules (`smtplib`, `imaplib`) use the
+  same `socket` and `ssl`. urllib3 and httpx are kept on these sockets instead of the browser's `fetch`, which does not
+  exist in a module. The browser's own network is never used.
+- **Where.** Programs in the VM: loopback, the VM's own addresses, and its names. The internet: once the application
+  connects the VM through a relay (`vm.network.connect`) and the user allows the session, public hosts on TCP 80 and 443.
+  Nothing on the internet can connect in.
+- **Offline.** Before the VM is connected, or after the user revoked it, Python fails as CPython does when the system refuses
+  a connection: `PermissionError` (EPERM) from `connect` and from name lookups, which urllib reports as
+  `URLError(PermissionError(...))` and requests as `ConnectionError`; a revoke resets open connections. The program decides what to do and which status to exit with; the module adds nothing.
+- **As in CPython 3.14** (recorded from it, `scripts/record-cpython-net.py`):
+  - a name that does not exist is `socket.gaierror(-2, 'Name or service not known')`, from `getaddrinfo`,
+    `gethostbyname` and `connect` alike, and a nameserver that does not answer `socket.gaierror(-3, 'Temporary failure in
+    name resolution')`; code that calls the C library's `getaddrinfo` itself (`_socket.getaddrinfo`, C extensions) gets the
+    same numbers with musl's wording (`kit.emscripten.networkImports`);
+  - a refused port is `ConnectionRefusedError`;
+  - a socket timeout (`settimeout`, `socket.setdefaulttimeout`, `create_connection(timeout=)`) bounds every read:
+    `recv` raises `TimeoutError('timed out')` when nothing arrives in time, and `BlockingIOError` (EAGAIN) on a
+    non-blocking socket;
+  - a certificate that is not trusted is `ssl.SSLCertVerificationError` with OpenSSL's `verify_code` and `verify_message`
+    (20 unknown issuer, 62 wrong name, 10 expired, 9 not yet valid);
+  - after the handshake, `getpeercert()` is the server's certificate decoded as CPython decodes it (`subject`, `issuer`,
+    `version`, `serialNumber`, `notBefore`, `notAfter`, `subjectAltName`, `OCSP`, `caIssuers`,
+    `crlDistributionPoints`), `{}` when the context's `verify_mode` is `CERT_NONE`, and its DER with `binary_form=True`;
+    `version()` is `TLSv1.3` or `TLSv1.2`, and `cipher()` OpenSSL's name of the suite, the version and its secret bits;
+  - `load_verify_locations` fails as CPython does for a file or data without a certificate.
+  Error numbers are Pyodide's (`errno.ECONNREFUSED`), as everywhere in Pyodide.
+- **Different on purpose, or because the engine does not say:** TLS always verifies: `verify_mode = CERT_NONE` and
+  `check_hostname = False` are accepted but change nothing (the error carries a note saying so). An authority the program
+  adds is checked when a connection uses it, not when it is loaded, and one the engine cannot use fails that connection
+  with `ssl.SSLError`; `get_ca_certs()` stays empty. The module passes a connection only the certificates that
+  `/etc/ssl/cert.pem` lacks (a bundle such as certifi's, which requests loads by default, mostly repeats the VM's); the
+  engine takes at most 512 of them, 2 MiB, per connection, and more fail it with `ssl.SSLError`. Server-side TLS and client certificates are refused with
+  `ssl.SSLError`. Only IPv4 addresses are used. A socket timeout bounds reads, not connecting or sending. Pyodide's event
+  loop has no sockets, so asyncio streams cannot connect (`ssl.SSLObject` over memory BIOs works).
+- `oxidevm.connect_tcp` and `oxidevm.connect_unix` stay as they were in 0.2.0, with their own timeouts.
+
 ## How it is built and checked
 
-The Pyodide runtime (`pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json`) and the 13 wheels are mirrored byte for byte
+The Pyodide runtime (`pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json`) and the 21 wheels are mirrored byte for byte
 from [Pyodide 314.0.7](https://github.com/pyodide/pyodide/tree/314.0.7) and pinned by sha256 in `upstream/lock.json`. They are
 not committed; `pnpm run fetch-upstream` downloads and verifies them. The release pins them again in its `module.json`.
 
@@ -154,9 +225,9 @@ Pyodide's JavaScript is bundled into `adapter.mjs` (about 1.5 MB), with its fact
 or evaluated beyond the pinned bytes. Pyodide is told to find its files at a virtual address (`https://pyodide.invalid/`) and
 a scoped `fetch` answers for that address, only, from bytes the runner has verified against the release pins; every other URL
 under the virtual address is rejected and every other request goes to the real `fetch`. All files that Python will need are
-verified before Pyodide starts, so a file that was altered after staging stops the module with exit status 121 before any
-Python runs. Pyodide fetches that happen later (`pyodide.http`, `micropip`) go through the real `fetch`, which is why network
-installs inside Python are out of scope.
+checked by the runner when the module starts (once for the VM), so a file that was altered after staging stops the module
+with exit status 121 before any Python runs. Wheels are read from those checked copies when a program imports their
+packages. `micropip` and installs from the network are out of scope.
 
 ## Known limits
 
@@ -165,11 +236,15 @@ installs inside Python are out of scope.
   data and BroadcastChannels. Hiding the JavaScript bridge from commands is defence in depth, not a boundary: Pyodide's
   private modules, and objects that the `oxidevm` module holds, still lead to JavaScript. Turn the commands on only in a VM
   whose programs you would let run in your page.
-- Every run starts Pyodide again and unpacks the packages the application chose; how long that takes depends on the host:
-  about a second for the interpreter alone, several more with pandas and Matplotlib. Turn the commands on with the smallest
-  `packages` list that the programs need.
-- There is no interactive interpreter yet: `-i`, and no program or `-` with a terminal on standard input, stop with
-  `python3: the interactive interpreter is not supported yet; use FILE, -c CODE or -` and status 2. `-m` is refused too.
+- Every run starts Pyodide again and unpacks the packages it imports (or that `packages` preloads); how long that takes
+  depends on the host: about a second for the interpreter alone, several more with pandas and Matplotlib.
+- A package that loads on import is read and unpacked synchronously, so the module's worker is busy while it loads (pandas
+  and Matplotlib take a few seconds); a Ctrl+C meanwhile is raised once the load ends.
+- Without WebAssembly JSPI, `oxidevm.run`, `connect_unix` and `connect_tcp` raise `OSError(errno.ENOTSUP)`; Python's own
+  `socket` reaches services in the VM without it. Pyodide's own JSPI-based features (`pyodide.ffi.run_sync`, asyncio
+  that blocks on JavaScript) are what they are in Pyodide on that browser.
+- The interactive interpreter is CPython's basic REPL only: no PyREPL (colours, multi-line editing, history, completion),
+  and `sys.flags.interactive` and `sys.flags.inspect` stay 0 with `-i`.
 - `sys.exit(n)` with `n & 255` above 119 exits with 119 (CPython exits with up to 255). `-I` and `-P` do not take the
   program's directory off `sys.path`, as CPython does with them.
 - Only Ctrl+C (SIGINT) reaches the program. SIGTERM, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 keep their default action, which
@@ -183,7 +258,7 @@ installs inside Python are out of scope.
 - The module cancels cleanly when its process group is killed (`process.kill("SIGKILL", { scope: "process-group" })`); a
   native child started with `oxidevm.run` survives a kill of the module's process alone.
 - A socket behaves like any socket: `sendall` waits when the other side is not reading and the buffers are full, so a client
-  that sends a lot to a service that echoes it should read as it writes, or use `settimeout`.
+  that sends a lot to a service that echoes it should read as it writes. For the network's own limits see [Network](#network).
 - Licences: see [NOTICES.txt](NOTICES.txt), [SOURCE-OFFER.md](SOURCE-OFFER.md) and the [licences](#licences) below. The
   maintainer has signed them off; they have not had an independent legal review.
 
@@ -216,6 +291,8 @@ The unit tests need a Node with WebAssembly JSPI (Node 26, or Node 24 with `--ex
 | `src/python-loader.ts`, `src/artifact-fetch.ts`, `src/lock.ts` | starting Pyodide from the release's verified files |
 | `src/workspace-fs.ts` | Emscripten's file system over the VM's synchronous file API, and which trees Python sees |
 | `src/native-bridge.ts`, `src/socket-bridge.ts`, `src/python/` | `oxidevm.run`, `connect_unix`, `connect_tcp`, and the Python sources |
+| `src/net-bridge.ts`, `src/x509.ts`, `src/python/socket-patch.ts`, `src/python/ssl-patch.ts`, `scripts/record-cpython-net.py` | Python's network through the VM, and CPython's own behaviour that it is tested against |
+| `test/browser/relay/` | the relay test peer (from the SDK) and the throwaway PKI of the internet scenarios (`--internet`) |
 | `src/script.ts`, `src/guest.ts`, `src/stdio.ts` | running the program, process identity, standard streams |
 | `upstream/lock.json`, `scripts/fetch-upstream.ts` | what is mirrored, and how |
 | `legal/`, `scripts/generate-notices.ts` | pinned licence texts and the generator of `NOTICES.txt` and `SOURCE-OFFER.md` |
@@ -227,17 +304,44 @@ Publishing changes what others can install, so it goes draft, verify, publish: t
 against its own `SHA256SUMS` before it becomes visible. The tag must name the version in `module.ts`.
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 pnpm run build
-gh release create v0.2.0 dist/* --draft --verify-tag --title v0.2.0
-gh release download v0.2.0 --dir verify && (cd verify && sha256sum --check SHA256SUMS)
-gh release edit v0.2.0 --draft=false
+gh release create v0.3.0 dist/* --draft --verify-tag --title v0.3.0
+gh release download v0.3.0 --dir verify && (cd verify && sha256sum --check SHA256SUMS)
+gh release edit v0.3.0 --draft=false
 ```
 
 `pnpm run release` (`oxidevm wasm release --repo spacia-ai/oxidevm-pyodide`) prints these steps and runs none of them. The
 `release` workflow does the same in GitHub Actions, in two jobs: a read-only one fetches the upstream files and builds, and a
 second one, which installs nothing, drafts, verifies and publishes. The `ci` workflow runs on pushes to `main` and on pull
 requests, and `release` runs when a `v*` tag is pushed.
+
+## Changes in 0.3.0
+
+0.3.0 needs `@oxidevm/sdk` 0.0.12 or later (Userspace API 146). 0.0.12 is the first public SDK with the module frame and
+the networking standard; the versions 0.0.10 and 0.0.11 were never published. Installing 0.3.0 asks for consent again,
+because the module now declares network reach.
+
+- **Network: internet.** The module declares `net.internet` with `sockets.connect` and the purpose "Python programs reach
+  the internet through the VM". Python's `socket`, `ssl`, `http.client`, `urllib.request` and the shipped `requests`
+  (with `urllib3`) and `httpx` go through the VM's sockets and resolver, and TLS verifies against the VM's
+  `/etc/ssl/cert.pem`; see [Network](#network). Before the VM is connected through a relay, they fail as CPython does
+  when the system refuses a connection (`PermissionError`).
+- **Interactive interpreter.** With no program on a terminal, or after the program with `-i`, CPython's basic REPL runs:
+  prompts on standard error, Ctrl+C back to the prompt, end of input exits with 0; `-q` hides the banner.
+- **`-m module`** runs a module as `__main__` as CPython does: `sys.argv[0]` is the module's path and the working
+  directory comes first on `sys.path`; a bare `-m` exits with 2 and a missing module with 1 and CPython's message.
+- **Packages load on import.** `packages` is now a preload list and defaults to `[]` (0.2.0 preloaded pandas and
+  Matplotlib on every run); a program that imports numpy, pandas, PIL (pillow), Matplotlib, requests or httpx gets the
+  shipped wheel unpacked from the release's verified copy when it imports it. Added wheels: certifi,
+  charset-normalizer, h11, httpcore, httpx, idna, requests and urllib3.
+- **One compile per VM.** `pyodide.asm.wasm` is compiled once for the VM and reused by later runs.
+- **WebAssembly JSPI is optional.** `jspi` is no longer in `requires.browser`. `time.sleep`, imports and Python's own
+  network work without it, so default Firefox runs Python; only the `oxidevm` module's `run`, `connect_unix` and
+  `connect_tcp` need it and otherwise raise `OSError(errno.ENOTSUP)` before anything starts.
+- **Ctrl+C** is taken out of the interrupt buffer in one atomic step, so one written while the interpreter polls is no
+  longer lost.
+- **Module frame.** The module runs quietly in the SDK's isolated module frame (no classic-worker probe, no blob frames).
 
 ## Changes in 0.2.0
 

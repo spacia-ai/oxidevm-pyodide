@@ -4,7 +4,7 @@
     "interpreter": "/usr/bin/python3.14",
     "version": "3.14.4",
     "build": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
-    "recorded": "2026-11-01",
+    "recorded": "2026-11-02",
     "recorder": "scripts/record-cpython-cli.py",
     "command": "python3.14 -I scripts/record-cpython-cli.py",
     "cwd": "/tmp/oxidevm-pyodide-cli",
@@ -19,7 +19,12 @@
   },
   "files": {
     "sub/probe.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
-    "-dash.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n"
+    "-dash.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+    "modprobe.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+    "modfail.py": "def fail():\n    raise ValueError('bad value')\nfail()\n",
+    "pkgprobe/__init__.py": "",
+    "pkgprobe/__main__.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n",
+    "pkgprobe/inner.py": "import json, sys; print(json.dumps({\"argv\": sys.argv, \"orig_argv\": sys.orig_argv, \"executable\": sys.executable, \"path0\": sys.path[0], \"file\": globals().get(\"__file__\"), \"filename\": sys._getframe(0).f_code.co_filename, \"name\": __name__}, sort_keys=True))\n"
   },
   "cases": [
     {
@@ -547,6 +552,836 @@
         "kind": "exited",
         "code": 0
       }
+    },
+    {
+      "name": "module-with-arguments",
+      "argv": [
+        "python3",
+        "-m",
+        "modprobe",
+        "one",
+        "--two"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"one\", \"--two\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-m\", \"modprobe\", \"one\", \"--two\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-attached-to-option",
+      "argv": [
+        "python3",
+        "-mmodprobe",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"one\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-mmodprobe\", \"one\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-in-group",
+      "argv": [
+        "python3",
+        "-um",
+        "modprobe"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/modprobe.py\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-um\", \"modprobe\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-package-main",
+      "argv": [
+        "python3",
+        "-m",
+        "pkgprobe",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/pkgprobe/__main__.py\", \"one\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/pkgprobe/__main__.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/pkgprobe/__main__.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-m\", \"pkgprobe\", \"one\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-submodule",
+      "argv": [
+        "python3",
+        "-m",
+        "pkgprobe.inner"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/pkgprobe/inner.py\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/pkgprobe/inner.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/pkgprobe/inner.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-m\", \"pkgprobe.inner\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-missing",
+      "argv": [
+        "python3",
+        "-m",
+        "nosuchmodule",
+        "one"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "/tmp/oxidevm-pyodide-cli/bin/python3: No module named nosuchmodule\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "module-without-argument",
+      "argv": [
+        "python3",
+        "-m"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Argument expected for the -m option\nusage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nTry `python -h' for more information.\n",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "module-package-without-main",
+      "argv": [
+        "python3",
+        "-m",
+        "json.tool.nothing"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "/tmp/oxidevm-pyodide-cli/bin/python3: Error while finding module specification for 'json.tool.nothing' (ModuleNotFoundError: __path__ attribute not found on 'json.tool' while trying to find 'json.tool.nothing')\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "module-traceback",
+      "argv": [
+        "python3",
+        "-m",
+        "modfail"
+      ],
+      "stdin": "",
+      "stdout": "",
+      "stdoutKept": "all",
+      "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/tmp/oxidevm-pyodide-cli/modfail.py\", line 3, in <module>\n    fail()\n    ~~~~^^\n  File \"/tmp/oxidevm-pyodide-cli/modfail.py\", line 2, in fail\n    raise ValueError('bad value')\nValueError: bad value\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "module-after-code",
+      "argv": [
+        "python3",
+        "-c",
+        "print('code')",
+        "-m",
+        "modprobe"
+      ],
+      "stdin": "",
+      "stdout": "code\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "code-after-module",
+      "argv": [
+        "python3",
+        "-m",
+        "modprobe",
+        "-c",
+        "print('code')"
+      ],
+      "stdin": "",
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"-c\", \"print('code')\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-m\", \"modprobe\", \"-c\", \"print('code')\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "module-stdlib",
+      "argv": [
+        "python3",
+        "-m",
+        "base64",
+        "-e"
+      ],
+      "stdin": "hello\n",
+      "stdout": "aGVsbG8K\n",
+      "stdoutKept": "all",
+      "stderr": "",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-code-pipe",
+      "argv": [
+        "python3",
+        "-i",
+        "-c",
+        "x = 5"
+      ],
+      "stdin": "print(x * 2)\n",
+      "stdout": "10\n",
+      "stdoutKept": "all",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-stdin-pipe",
+      "argv": [
+        "python3",
+        "-i"
+      ],
+      "stdin": "x = 7\nprint(x)\n",
+      "stdout": "7\n",
+      "stdoutKept": "all",
+      "stderr": "Python 3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0] on linux\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> >>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "name": "repl-expressions",
+      "argv": [
+        "python3"
+      ],
+      "steps": [
+        {
+          "input": "1 + 1\n",
+          "when": "prompt"
+        },
+        {
+          "input": "x = 'text'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "x\n",
+          "when": "prompt"
+        },
+        {
+          "input": "print(x)\n",
+          "when": "prompt"
+        },
+        {
+          "input": "None\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "2\n'text'\ntext\n",
+      "stderr": "Python 3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0] on linux\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> >>> >>> >>> >>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-quiet",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "6 * 7\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "42\n",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-block",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "for i in range(2):\n",
+          "when": "prompt"
+        },
+        {
+          "input": "    print(i)\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\n",
+          "when": "prompt"
+        },
+        {
+          "input": "def f(a):\n",
+          "when": "prompt"
+        },
+        {
+          "input": "    return a + 1\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\n",
+          "when": "prompt"
+        },
+        {
+          "input": "f(1)\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "0\n1\n2\n",
+      "stderr": ">>> ... ... >>> ... ... >>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-exception",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "1 / 0\n",
+          "when": "prompt"
+        },
+        {
+          "input": "undefined_name\n",
+          "when": "prompt"
+        },
+        {
+          "input": "def f(:\n",
+          "when": "prompt"
+        },
+        {
+          "input": "'still here'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'still here'\n",
+      "stderr": ">>> Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n    1 / 0\n    ~~^~~\nZeroDivisionError: division by zero\n>>> Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n    undefined_name\nNameError: name 'undefined_name' is not defined\n>>>   File \"<stdin>\", line 1\n    def f(:\n          ^\nSyntaxError: invalid syntax\n>>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-interrupt-at-prompt",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "\u0003",
+          "when": "prompt"
+        },
+        {
+          "input": "for i in range(2):\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0003",
+          "when": "prompt"
+        },
+        {
+          "input": "'after'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'after'\n",
+      "stderr": ">>> \nKeyboardInterrupt\n>>> ... \nKeyboardInterrupt\n>>> >>> \n",
+      "exit": {
+        "kind": "signaled",
+        "signal": "SIGINT"
+      }
+    },
+    {
+      "name": "repl-interrupt-loop",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "while True: pass\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0003",
+          "when": "running"
+        },
+        {
+          "input": "'after'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'after'\n",
+      "stderr": ">>> ... Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n    while True: pass\n                ^^^^\nKeyboardInterrupt\n>>> >>> \n",
+      "exit": {
+        "kind": "signaled",
+        "signal": "SIGINT"
+      }
+    },
+    {
+      "name": "repl-interrupt-then-exit",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "\u0003",
+          "when": "prompt"
+        },
+        {
+          "input": "import sys; sys.exit(2)\n",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": ">>> \nKeyboardInterrupt\n>>> ",
+      "exit": {
+        "kind": "exited",
+        "code": 2
+      }
+    },
+    {
+      "name": "repl-handled-interrupt",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "try:\n",
+          "when": "prompt"
+        },
+        {
+          "input": "    raise KeyboardInterrupt\n",
+          "when": "prompt"
+        },
+        {
+          "input": "except KeyboardInterrupt:\n",
+          "when": "prompt"
+        },
+        {
+          "input": "    print('handled')\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "handled\n",
+      "stderr": ">>> ... ... ... ... >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-earlier-function-raises",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "def g():\n",
+          "when": "prompt"
+        },
+        {
+          "input": "    return 1 / 0\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\n",
+          "when": "prompt"
+        },
+        {
+          "input": "x = 1\n",
+          "when": "prompt"
+        },
+        {
+          "input": "g()\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": ">>> ... ... >>> >>> Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n    g()\n    ~^^\n  File \"<stdin>\", line 2, in g\n    return 1 / 0\n           ~~^~~\nZeroDivisionError: division by zero\n>>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-exit-status",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "import sys; sys.exit(3)\n",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": ">>> ",
+      "exit": {
+        "kind": "exited",
+        "code": 3
+      }
+    },
+    {
+      "name": "repl-exit-builtin",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "exit(4)\n",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": ">>> ",
+      "exit": {
+        "kind": "exited",
+        "code": 4
+      }
+    },
+    {
+      "name": "repl-uncaught-system-exit-text",
+      "argv": [
+        "python3",
+        "-q"
+      ],
+      "steps": [
+        {
+          "input": "raise SystemExit('bye')\n",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": ">>> bye\n",
+      "exit": {
+        "kind": "exited",
+        "code": 1
+      }
+    },
+    {
+      "name": "repl-dash",
+      "argv": [
+        "python3",
+        "-q",
+        "-"
+      ],
+      "steps": [
+        {
+          "input": "'dash'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'dash'\n",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "repl-argv",
+      "argv": [
+        "python3",
+        "-q",
+        "-",
+        "one"
+      ],
+      "steps": [
+        {
+          "input": "import sys; sys.argv, sys.path[0]\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "(['-', 'one'], '')\n",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-code",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "-c",
+        "x = 5"
+      ],
+      "steps": [
+        {
+          "input": "x * 2\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "10\n",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-code-banner",
+      "argv": [
+        "python3",
+        "-i",
+        "-c",
+        "print('ran')"
+      ],
+      "steps": [
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "ran\n",
+      "stderr": ">>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-raising-code",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "-c",
+        "def f():\n    raise ValueError('bad')\nf()"
+      ],
+      "steps": [
+        {
+          "input": "'alive'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'alive'\n",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\n    f()\n    ~^^\n  File \"<string>\", line 2, in f\n    raise ValueError('bad')\nValueError: bad\n>>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-raising-file",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "modfail.py"
+      ],
+      "steps": [
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/tmp/oxidevm-pyodide-cli/modfail.py\", line 3, in <module>\n    fail()\n    ~~~~^^\n  File \"/tmp/oxidevm-pyodide-cli/modfail.py\", line 2, in fail\n    raise ValueError('bad value')\nValueError: bad value\n>>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-exit",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "-c",
+        "import sys; sys.exit(5)"
+      ],
+      "steps": [
+        {
+          "input": "'inspect'\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "'inspect'\n",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import sys; sys.exit(5)\n                ~~~~~~~~^^^\nSystemExit: 5\n>>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-module",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "-m",
+        "modprobe"
+      ],
+      "steps": [
+        {
+          "input": "__name__\n",
+          "when": "prompt"
+        },
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "{\"argv\": [\"/tmp/oxidevm-pyodide-cli/modprobe.py\"], \"executable\": \"/tmp/oxidevm-pyodide-cli/bin/python3\", \"file\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"filename\": \"/tmp/oxidevm-pyodide-cli/modprobe.py\", \"name\": \"__main__\", \"orig_argv\": [\"python3\", \"-q\", \"-i\", \"-m\", \"modprobe\"], \"path0\": \"/tmp/oxidevm-pyodide-cli\"}\n'__main__'\n",
+      "stderr": ">>> >>> \n",
+      "exit": {
+        "kind": "exited",
+        "code": 0
+      }
+    },
+    {
+      "name": "interactive-after-interrupt",
+      "argv": [
+        "python3",
+        "-q",
+        "-i",
+        "-c",
+        "raise KeyboardInterrupt"
+      ],
+      "steps": [
+        {
+          "input": "\u0004",
+          "when": "prompt"
+        }
+      ],
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    raise KeyboardInterrupt\nKeyboardInterrupt\n>>> \n",
+      "exit": {
+        "kind": "signaled",
+        "signal": "SIGINT"
+      }
+    }
+  ],
+  "sessionEnvironment": {
+    "PATH": "/tmp/oxidevm-pyodide-cli/bin",
+    "HOME": "/tmp/oxidevm-pyodide-cli",
+    "LC_ALL": "C.UTF-8",
+    "PYTHON_BASIC_REPL": "1",
+    "PYTHONPATH": "(a directory whose readline.py raises ImportError)",
+    "TERM": "dumb"
+  }
 }

@@ -5,6 +5,9 @@ import { kit } from "@oxidevm/sdk/wasm";
 import type { NativeRunRequest } from "@oxidevm/sdk/wasm";
 import type { PyodideInterface } from "pyodide";
 import { installGuest } from "../../src/guest.ts";
+import type { ShippedPackages } from "../../src/guest.ts";
+import type { NetHost } from "../../src/host-types.ts";
+import { netBridge } from "../../src/net-bridge.ts";
 import { catchInterrupts, createInterrupts } from "../../src/signals.ts";
 import { nativeRunner } from "../../src/native-bridge.ts";
 import { parseCommandLine } from "../../src/cli.ts";
@@ -43,6 +46,8 @@ export interface CommandLineOptions {
   readonly stdin?: string;
   readonly argv0?: string;
   readonly executable?: string;
+  /** Whether standard input is a terminal (default: not). */
+  readonly terminal?: boolean;
 }
 
 /**
@@ -76,7 +81,16 @@ export interface GuestFixture {
 export const IDENTITY = { pid: 4242, uid: 1000, gid: 1001, cwd: "/workspace" } as const;
 
 /** The workspace and /tmp of the VM, each a directory of the test machine. */
-export async function startGuest(behave: (argv: readonly string[]) => Child = () => ({})): Promise<GuestFixture> {
+/** What a guest may have beyond the defaults: packages that load on import, and the VM network for socket and ssl. */
+export interface GuestExtras {
+  readonly packages?: ShippedPackages;
+  readonly net?: { readonly net: NetHost };
+  /** The VM's /etc/ssl/cert.pem, as the module reads it to compare a program's authorities with (src/trust.ts). */
+  readonly trustStore?: Uint8Array;
+}
+
+export async function startGuest(behave: (argv: readonly string[]) => Child = () => ({}), extras: GuestExtras = {}): Promise<GuestFixture> {
+  const { packages } = extras;
   const root = await mkdtemp(join(tmpdir(), "pyodide-guest-"));
   await mkdir(join(root, "workspace"));
   await mkdir(join(root, "tmp"));
@@ -96,10 +110,12 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     recv: (handle, size, timeoutMs) => { socketRequests.push({ operation: "recv", timeoutMs, size }); return realSockets.recv(handle, size, timeoutMs); },
   };
   const interrupts = createInterrupts();
-  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets, interrupts };
-  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }));
+  const net = extras.net === undefined ? undefined : netBridge(extras.net, error => kit.net.errno(error), () => extras.trustStore);
+  const bridges = { run: nativeRunner({ ...process.host, kit: spyKit, signal: lifetime.signal }), sockets: recordingSockets, interrupts, ...(packages === undefined ? {} : { packages }), ...(net === undefined ? {} : { net }) };
+  const py = await startPyodide(pythonEnvironment({ PATH: "/usr/bin", PYTHONHOME: "/usr", FOO: "bar", HOME: "/home/user" }), extras.net === undefined ? undefined : imports => { kit.emscripten.networkImports(imports); });
   for (const tree of [WORKSPACE, TMP]) mountTree(py.FS, files.files, kit.errno, tree);
   attachStandardStreams(py, stdio.files, stdio.streams, kit.errno);
+  if (extras.net !== undefined) net?.attachSockets(kit.emscripten.network(extras.net, Reflect.get(py, "_module")));
   installGuest(py, IDENTITY, bridges);
   const trap = await catchInterrupts(fakeSignals().signals, interrupts);
 
@@ -111,7 +127,7 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     if (line.kind !== "run") throw new Error(`${args.join(" ")} is not a program to run`);
     const report = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
     line.warnings.forEach(report);
-    const prepared = prepareProgram({ fs: files.files, errnoOf: kit.errno.of, stdin: stdio.streams.stdin }, launch, line);
+    const prepared = prepareProgram({ fs: files.files, errnoOf: kit.errno.of, stdin: stdio.streams.stdin, stdinIsTerminal: options.terminal === true }, launch, line);
     if (prepared.kind === "failed") {
       report(prepared.message);
       return { status: prepared.status, ...stdio.take() };
@@ -123,6 +139,8 @@ export async function startGuest(behave: (argv: readonly string[]) => Child = ()
     } finally {
       // Each run is a process of its own: Pyodide watches for Ctrl+C only once the next runner arms it again.
       py.setInterruptBuffer(new Int32Array(1));
+      // The builtin exit() closes sys.stdin, as in CPython; the next process would have a fresh one.
+      py.runPython("import sys as _s\nif _s.stdin.closed:\n    _s.stdin = open(0, 'r', encoding=_s.stdin.encoding, errors=_s.stdin.errors, closefd=False)\ndel _s");
     }
   }
 

@@ -1,10 +1,11 @@
 import type { CommandHooks, CommandIO } from "@oxidevm/sdk/wasm";
-import { helpText, interactiveRefusal, parseCommandLine, usageError, versionText } from "./cli.ts";
+import { helpText, parseCommandLine, usageError, versionText } from "./cli.ts";
 import type { CommandLine } from "./cli.ts";
 import { guestProcess } from "./identity.ts";
 import { hideJavaScript, installGuest } from "./guest.ts";
 import type { CommandHost } from "./host-types.ts";
 import { nativeRunner } from "./native-bridge.ts";
+import { netBridge } from "./net-bridge.ts";
 import { bundledEngine, loadPython } from "./python-loader.ts";
 import type { Engine } from "./python-loader.ts";
 import { HOST_ARGV0, placementRefusal, prepareProgram, pythonEnvironment, runProgram } from "./script.ts";
@@ -16,6 +17,9 @@ import { attachStandardStreams } from "./stdio.ts";
 import { mountTree, visibleTrees } from "./workspace-fs.ts";
 
 type IO = CommandIO<PythonCommand>;
+
+/** The largest /etc/ssl/cert.pem read to compare a program's authorities with. */
+const MAX_TRUST_STORE_BYTES = 4 * 1024 * 1024;
 
 /** How the process was started: by a program in the VM through one of the commands, or by the application. */
 function launchOf(io: IO): Launch {
@@ -47,12 +51,16 @@ function answer(host: CommandHost, io: IO, argv0: string, line: Exclude<CommandL
 
 /**
  * The command: `main(io)` reads the command line as CPython 3.14 does and runs the program it names (a file, the text
- * after -c, or standard input) with the trees of the VM that Python sees mounted. Everything that can be refused is refused
+ * after -c, a module after -m, or standard input) with the trees of the VM that Python sees mounted, and CPython's basic
+ * interactive interpreter when standard input is a terminal with no program, or after the program with -i. Everything that can be refused is refused
  * before Python starts, so a usage error, a missing file or a directory Python cannot see costs nothing. Ctrl+C is
  * KeyboardInterrupt once the program runs; left unhandled, it ends the process killed by SIGINT, as with CPython.
  */
 export function createCommand(host: CommandHost, engine: Engine = bundledEngine): CommandHooks<PythonCommand> {
   const sockets = socketBridge(host);
+  // The VM's own authorities, so that a program's CA bundle adds only those the VM lacks (src/trust.ts).
+  const vmStore = (): Uint8Array | undefined => { try { return host.fs.readFile("/etc/ssl/cert.pem", MAX_TRUST_STORE_BYTES); } catch { return undefined; } };
+  const net = netBridge(host, error => host.kit.net.errno(error), vmStore);
   const report = (error: unknown): void => { host.log(JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: error instanceof Error ? error.message : String(error) })); };
   return {
     async main(io) {
@@ -60,18 +68,25 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       const line = parseCommandLine(io.args);
       if (line.kind !== "run") return answer(host, io, launch.argv0, line);
       const trees = visibleTrees(io.env["HOME"], host.fs);
-      const refusal = interactiveRefusal(launch.argv0, line, io.terminals.stdin) ?? placementRefusal(launch.argv0, launch.cwd, line, trees);
+      const refusal = placementRefusal(launch.argv0, launch.cwd, line, trees);
       if (refusal !== undefined) return host.fail(2, refusal);
       for (const warning of line.warnings) host.log(warning);
-      const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin }, launch, line);
+      const prepared = prepareProgram({ fs: host.fs, errnoOf: error => host.kit.errno.of(error), stdin: io.stdin, stdinIsTerminal: io.terminals.stdin }, launch, line);
       if (prepared.kind === "failed") return host.fail(prepared.status, prepared.message);
 
       const info = await host.process.info();
-      const py = await loadPython({ packages: host.options.packages, bytes: name => host.artifacts.bytes(name), env: pythonEnvironment(io.env), log: text => { host.log(text); } }, engine);
+      const python = await loadPython({
+        packages: host.options.packages, bytes: name => host.artifacts.bytes(name), bytesSync: name => host.artifacts.bytesSync(name), compile: name => host.artifacts.compile(name),
+        env: pythonEnvironment(io.env), log: text => { host.log(text); }, networkImports: imports => { host.kit.emscripten.networkImports(imports); },
+      }, engine);
+      const { py } = python;
+      // Python's sockets and Emscripten's own name lookups go to the VM's network (engine ADR 0029, N-4).
+      // Python's socket timeouts become the receive timeouts of those sockets (src/python/socket-patch.ts).
+      net.attachSockets(host.kit.emscripten.network(host, Reflect.get(py, "_module")));
       for (const tree of trees) mountTree(py.FS, host.fs, host.kit.errno, tree, report);
       attachStandardStreams(py, host.fs, host.stdio, host.kit.errno, io.terminals, info.terminal);
       const interrupts = createInterrupts();
-      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts });
+      installGuest(py, guestProcess(info, launch.cwd), { run: nativeRunner(host), sockets, interrupts, packages: python, net });
       // Defence in depth, not a boundary: a program in the VM must not reach the page's JavaScript through Python.
       if (io.invocation.kind === "command") hideJavaScript(py);
       const trap = await catchInterrupts(host.process.signals, interrupts);
@@ -79,6 +94,7 @@ export function createCommand(host: CommandHost, engine: Engine = bundledEngine)
       return outcome.kind === "exit" ? outcome.status : endBySignal(host.process.signals, trap);
     },
     async close() {
+      net.freeAll();
       await sockets.closeAll();
     },
   };

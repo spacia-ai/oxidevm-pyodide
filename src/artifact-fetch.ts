@@ -8,12 +8,21 @@ export interface FetchScope {
 
 /**
  * The files Pyodide may read, already verified against the release pins. `index` is the virtual address they appear
- * under; nothing is ever requested from it, and it ends in `.invalid`, which no resolver answers.
+ * under; nothing is ever requested from it, and it ends in `.invalid`, which no resolver answers. `read` answers for a
+ * served file name with its bytes (read only when Pyodide asks for it), and with undefined for any other name.
  */
 export interface ServedFiles {
   readonly index: string;
-  readonly files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
+  readonly read: (name: string) => Promise<Uint8Array<ArrayBuffer>> | undefined;
+  /** WebAssembly files the VM already compiled: served as an empty response that names them in `PRECOMPILED_HEADER`. */
+  readonly precompiled?: ReadonlySet<string>;
 }
+
+/**
+ * The header of a WebAssembly file that is served without its bytes because the VM already compiled it: whoever
+ * instantiates the response instantiates that module instead (`withPrecompiledWasm` in src/python-loader.ts).
+ */
+export const PRECOMPILED_HEADER = "x-oxidevm-precompiled";
 
 export const VIRTUAL_INDEX = "https://pyodide.invalid/";
 
@@ -70,9 +79,12 @@ export function scopedFetch(served: ServedFiles, passthrough: Fetch): Fetch {
     if (cancelled?.aborted === true) return Promise.reject(cancelled.reason instanceof Error ? cancelled.reason : new TypeError("The request was cancelled"));
     if (methodOf(input, init) !== "GET") return refuse("can only be read");
     const name = fileNameOf(address, index);
-    const bytes = name === undefined ? undefined : served.files.get(name);
-    if (name === undefined || bytes === undefined) return refuse("is not an artifact of the pyodide module");
-    return Promise.resolve(new Response(bytes, { status: 200, headers: { "content-type": contentTypeFor(name), "content-length": String(bytes.length) } }));
+    if (name !== undefined && served.precompiled?.has(name) === true) {
+      return Promise.resolve(new Response(null, { status: 200, headers: { "content-type": contentTypeFor(name), [PRECOMPILED_HEADER]: name } }));
+    }
+    const reading = name === undefined ? undefined : served.read(name);
+    if (name === undefined || reading === undefined) return refuse("is not an artifact of the pyodide module");
+    return reading.then(bytes => new Response(bytes, { status: 200, headers: { "content-type": contentTypeFor(name), "content-length": String(bytes.length) } }));
   };
 }
 

@@ -15,16 +15,33 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   module starts with it. The expectations come from real CPython: `test/fixtures/cpython-cli.json`, recorded by
   `python3.14 -I scripts/record-cpython-cli.py` (`--check` compares without writing). Add a case there before changing
   behaviour that CPython defines; tests normalise only the interpreter path and the version text. Behaviour that differs
-  from CPython on purpose (no REPL, no `-m`, statuses limited to 119, ignored `-I` and `-P`) is tested on its own and
-  listed in README.md.
-- Anything that can be refused (usage, a terminal on standard input, a directory Python cannot see, an unreadable program)
+  from CPython on purpose (the basic REPL only, statuses limited to 119, ignored `-I` and `-P`) is tested on its own and
+  listed in README.md. Terminal sessions of the REPL are recorded the same way (`sessions`: standard input a PTY in cooked
+  mode, `PYTHON_BASIC_REPL=1`, readline unimportable) and replayed by `test/repl.test.ts`.
+- Anything that can be refused (usage, a directory Python cannot see, an unreadable program)
   is refused before Pyodide loads, so that it costs nothing.
+- WebAssembly JSPI is optional (the manifest does not require it; Firefox ships it behind a preference). Everything a
+  command, the REPL, `-m`, imports and Python's network need is synchronous: `time.sleep` blocks with `Atomics.wait`
+  (`Interrupts.sleepSync`), a package a program imports is unpacked with `host.artifacts.bytesSync` (`installSync`), and
+  sockets use the kit's synchronous path. Only the `oxidevm` module's waits use `run_sync`, and they refuse with ENOTSUP
+  before starting anything when `can_run_sync()` is false. Do not add a new `run_sync` to a path a command needs.
 - Ctrl+C (`src/signals.ts`): SIGINT is trapped once Pyodide has loaded, and the runner arms Pyodide's interrupt buffer from
   inside its own `try`. Pyodide's event loop must never see a pending interrupt: every JavaScript call that Python waits for
-  (`run_sync`) holds a pending Ctrl+C before it settles and resolves with its outcome instead of rejecting (`held` in
+  (`run_sync`, only the `oxidevm` module's `run` and `connect_*`) holds a pending Ctrl+C before it settles and resolves with its outcome instead of rejecting (`held` in
   `src/guest.ts`), and Python calls `_oxidevm_bridge.check_interrupt()` right after it, which puts the Ctrl+C back and
   raises KeyboardInterrupt. A new wait of the bridge must do the same. Ctrl+C during the program's own asyncio waits is
-  not handled yet (README.md, Known limits).
+  not handled yet (README.md, Known limits). The interpreter polls the buffer through its import
+  `_Py_CheckEmscriptenSignals_Helper`, which `useAtomicSignalPoll` replaces with an `Atomics.exchange` when the
+  interpreter is instantiated (`withPreparedImports` in `src/python-loader.ts`): never edit Pyodide's files for this.
+- Network (engine ADR 0029): the manifest declares `net.internet` with `sockets.connect` and a purpose, no hosts. Python's
+  network goes only through the VM: `kit.emscripten.network` for Pyodide's sockets, `src/net-bridge.ts` for names and TLS
+  sessions, and the Python patches in `src/python/` (`socket-patch.ts`, `ssl-patch.ts`, `http-clients-patch.ts`). Never
+  use the browser's `fetch`, XHR or WebSocket for Python, and never add a way to turn TLS verification off (a program may
+  add authorities with `load_verify_locations`, never remove the VM's). The interpreter's imports go through
+  `kit.emscripten.networkImports` before it is instantiated, and Python's socket timeouts become receive timeouts
+  (`receive_timeout`). `getpeercert()` is decoded by `src/x509.ts` and compared with CPython's own decoding. A network
+  failure fails as CPython 3.14 does (`test/fixtures/cpython-net.json`, recorded by `python3.14 -I
+  scripts/record-cpython-net.py`); a Python program decides its own exit, so the module never exits 69 for it.
 - A program started as a command cannot import the JavaScript bridge (`src/python/hide-bridge.ts`); application starts can.
   It is defence in depth, not a boundary, and README.md must keep saying so.
 - Import types from `@oxidevm/sdk/wasm` with `import type`; the only value import is `defineModule`. The adapter ships as one
@@ -43,8 +60,9 @@ manifest (a literal) and the wiring of the adapter; the code is in `src/`. It de
   the engine release, a signed Userspace image with python3, and Chromium (see `test/browser/harness.ts`).
   `test:conformance` starts the module as `-c pass`: a start without a program reads one from standard input, which
   `oxidevm wasm test` leaves open, so it would never end.
-- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.9, Userspace API 145, which module commands and
-  `process.signals` need; `files.sync` and `files.async` need 144 for `utimes`) and installed from npm. The committed
+- `@oxidevm/sdk` and `@oxidevm/cli` are pinned to an exact version (0.0.12, Userspace API 146: the module frame, `net.internet`,
+  `kit.emscripten.network` and `kit.tls` need it; module commands and `process.signals` need 145, and `files.sync` and
+  `files.async` 144 for `utimes`) and installed from npm. The committed
   `pnpm-workspace.yaml` only allows esbuild's install script and excludes those two versions from pnpm's minimum-release-age
   policy.
 - To develop against an SDK that is not published yet, use a local build of the SDK repository:

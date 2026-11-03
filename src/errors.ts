@@ -6,7 +6,9 @@ export type ModuleErrorCode =
   | "workspace-unavailable"
   | "native-request"
   | "socket-request"
-  | "signal-raise";
+  | "signal-raise"
+  | "interpreter-imports"
+  | "package-install";
 
 /** A failure of this module's own code, as opposed to one in the Python program it runs. */
 export class ModuleError extends Error {

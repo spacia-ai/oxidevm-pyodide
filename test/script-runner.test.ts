@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PYTHON_VERSION } from "../src/cli.ts";
-import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
+import { normalised, oracle, oracleFiles, recordedOutcome, withoutBuild } from "./support/cpython-oracle.ts";
 import { startGuest } from "./support/guest-fixture.ts";
 import type { GuestFixture } from "./support/guest-fixture.ts";
 
@@ -81,6 +81,13 @@ describe("errors", () => {
     expect(lines).toContain('  File "/workspace/program.py", line 4, in callback');
     expect(lines.at(-1)).toBe("ValueError: in the callback");
     expect(result.stderr).not.toMatch(/:\/\/|\.m?js"|\.ts"|<exec>/u);
+  });
+
+  it("drops frames of the blob the adapter runs from in the SDK's module frame (blob:null/...)", async () => {
+    const result = await guest.run('ns = {}\nexec(compile("def relay(f):\\n    return f()\\n", "blob:null/0f0e", "exec"), ns)\n\ndef callback():\n    raise ValueError("through the blob")\n\nns["relay"](callback)\n');
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("blob:");
+    expect(result.stderr).toContain('  File "/workspace/program.py", line 5, in callback');
   });
 
   it("reports a syntax error with its place, without a traceback of the runner", async () => {
@@ -214,7 +221,7 @@ describe("how the program was started, against CPython 3.14", () => {
   for (const recorded of cases) {
     it(`${recorded.name}: sys.argv, sys.orig_argv, sys.executable, sys.path[0], __file__, the program name, output and status`, async () => {
       const result = await guest.runCommandLine(recorded.argv.slice(1), { cwd: oracle.provenance.cwd, stdin: recorded.stdin, argv0: oracle.provenance.argv0, executable: MODULE.executable });
-      expect(result).toEqual({ status: recorded.exit.kind === "exited" ? recorded.exit.code : -1, stdout: normalised(recorded.stdout, MODULE), stderr: normalised(recorded.stderr, MODULE) });
+      expect({ ...result, stderr: withoutBuild(result.stderr) }).toEqual({ status: recorded.exit.kind === "exited" ? recorded.exit.code : -1, stdout: normalised(recorded.stdout, MODULE), stderr: normalised(recorded.stderr, MODULE) });
     });
   }
 });

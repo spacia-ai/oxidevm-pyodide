@@ -4,7 +4,10 @@ import type { ModuleHandle } from "@oxidevm/sdk/wasm";
 import { COMMAND_SCENARIOS, enableCommands } from "./scenarios-commands.ts";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
 import { filesBothWays, largeFiles, metadata, plot } from "./scenarios-files.ts";
-import { cancellation, exitStatuses, identity, nativeRun, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
+import { cancellation, exitStatuses, HAS_JSPI, identity, nativeRun, oxidevmWithoutJspi, packagesOption, pandas, standardStreams, startupTiming, tamperedArtifact } from "./scenarios-process.ts";
+import { INTERNET_SCENARIOS } from "./scenarios-internet.ts";
+import type { InternetConfig } from "./scenarios-internet.ts";
+import { NETWORK_SCENARIOS } from "./scenarios-network.ts";
 import { sockets } from "./scenarios-sockets.ts";
 import type { Context } from "./support.ts";
 
@@ -13,6 +16,8 @@ export interface ScenarioConfig {
   readonly image: { readonly manifestUrl: string; readonly manifestSHA256: string; readonly trust: { readonly algorithm: "Ed25519"; readonly keyId: string; readonly publicKey: string } };
   /** Run only the scenarios whose name contains this text. */
   readonly only?: string;
+  /** The relay test peer and the test root: the internet scenarios run only with them (`--internet`). */
+  readonly internet?: InternetConfig;
 }
 
 export interface ScenarioResult {
@@ -28,18 +33,21 @@ const ENABLE = "command: enableModuleCommands turns python and python3 on";
 /** In the order they run. The first one pays for the cold start of the browser's caches. */
 const SCENARIOS: readonly Scenario[] = [
   ["numpy and pandas compute in the module", pandas],
-  ["the packages option selects what is loaded, and the SDK refuses an unknown package", packagesOption],
+  ["packages load when imported, the packages option preloads, and the SDK refuses an unknown package", packagesOption],
   ["stdin, stdout and stderr are the process's descriptors 0, 1 and 2, and the exit status comes back", standardStreams],
   ["os.getpid, getuid and getgid report the module's real Linux process", identity],
   ["exit statuses: success, traceback, SystemExit n (limited to 119), usage and unreadable program", exitStatuses],
-  ["a file altered after staging is refused before any module code runs (exit 121)", tamperedArtifact],
+  ["a file altered after staging is refused before any module code runs", tamperedArtifact],
   ["files are shared both ways with native Linux, permissions included, while the module runs", filesBothWays],
   ["files of 20 MiB cross the module's transfer limit in both directions", largeFiles],
   ["chmod, truncate, symlink, shutil.copy and utime reach the VM's files", metadata],
-  ["oxidevm.run runs native programs with input, status, timeout and output bounds", nativeRun],
-  ["cancelling the module retires its native child in under 5 seconds", cancellation],
+  // The oxidevm module waits for the VM with WebAssembly JSPI; without it (Firefox by default) it refuses precisely.
+  ...(HAS_JSPI ? [
+    ["oxidevm.run runs native programs with input, status, timeout and output bounds", nativeRun],
+    ["cancelling the module retires its native child in under 5 seconds", cancellation],
+  ] as const : [["without JSPI, the oxidevm module refuses with ENOTSUP and the rest of Python works", oxidevmWithoutJspi]] as const),
   ["matplotlib writes a valid PNG that Linux recognises", plot],
-  ["oxidevm.connect_unix and connect_tcp talk to native services", sockets],
+  ...(HAS_JSPI ? [["oxidevm.connect_unix and connect_tcp talk to native services", sockets]] as const : []),
   ["startup timing, for the record", startupTiming],
 ];
 
@@ -73,7 +81,7 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
   try {
     record({ name: "boot", ok: true, detail: `Userspace VM ready in ${String(Math.round(performance.now() - booting))} ms` });
     await vm.workspace.createDirectory("_oxidevm").catch(() => undefined);
-    const context: Context = { vm, pyodide, ...(commands === undefined ? {} : { commands }) };
+    const context: Context = { vm, pyodide, openVM: () => openVM(config), ...(commands === undefined ? {} : { commands }), ...(config.internet === undefined ? {} : { internet: config.internet }) };
     const selected = (name: string): boolean => config.only === undefined || name.includes(config.only);
     const attempt = async (name: string, run: (given: Context) => Promise<string>, given: Context): Promise<void> => {
       try {
@@ -85,7 +93,8 @@ export async function runScenarios(config: ScenarioConfig, pyodide: ModuleHandle
     for (const [name, run] of SCENARIOS) if (selected(name)) await attempt(name, run, context);
     // Every command scenario needs the commands on, or the shell finds the image's own python3 and the scenario tests
     // that instead of the module: enabling runs whenever any of them is selected, and without it none of them runs.
-    const commandScenarios = COMMAND_SCENARIOS.filter(([name]) => selected(name));
+    const internet = config.internet === undefined ? [] : INTERNET_SCENARIOS;
+    const commandScenarios = [...COMMAND_SCENARIOS.slice(0, -1), ...NETWORK_SCENARIOS, ...internet, ...COMMAND_SCENARIOS.slice(-1)].filter(([name]) => selected(name));
     let enabled: EnabledCommands | undefined;
     if (selected(ENABLE) || commandScenarios.length > 0) {
       await attempt(ENABLE, async given => {

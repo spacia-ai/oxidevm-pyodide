@@ -23,9 +23,15 @@ export interface RecordedWheel {
  * files. The generator refuses a wheel whose metadata says something else or whose licence files lack the evidence.
  */
 export const RECORDED: Readonly<Record<string, RecordedWheel>> = {
+  certifi: { spdx: "MPL-2.0", source: "https://github.com/certifi/python-certifi", evidence: ["Mozilla Public License"] },
+  "charset-normalizer": { spdx: "MIT", source: "https://github.com/jawah/charset_normalizer", evidence: ["Permission is hereby granted, free of charge"] },
   contourpy: { spdx: "BSD-3-Clause", source: "https://github.com/contourpy/contourpy", evidence: ["Neither the name of the copyright holder"] },
   cycler: { spdx: "BSD-3-Clause", source: "https://github.com/matplotlib/cycler", evidence: ["Neither the name of the matplotlib project"] },
   fonttools: { spdx: "MIT", source: "https://github.com/fonttools/fonttools", evidence: ["Permission is hereby granted, free of charge"] },
+  h11: { spdx: "MIT", source: "https://github.com/python-hyper/h11", evidence: ["Permission is hereby granted, free of charge"] },
+  httpcore: { spdx: "BSD-3-Clause", source: "https://github.com/encode/httpcore", evidence: ["Neither the name of the copyright holder"] },
+  httpx: { spdx: "BSD-3-Clause", source: "https://github.com/encode/httpx", evidence: ["Neither the name of the copyright holder"] },
+  idna: { spdx: "BSD-3-Clause", source: "https://github.com/kjd/idna", evidence: ["Neither the name of the copyright holder"] },
   kiwisolver: { spdx: "BSD-3-Clause", source: "https://github.com/nucleic/kiwi", evidence: ["Modified BSD License", "Neither the name of the Nucleic Development Team"] },
   matplotlib: { spdx: "LicenseRef-Matplotlib AND OFL-1.1 AND Bitstream-Vera", source: "https://github.com/matplotlib/matplotlib", evidence: ["License agreement for matplotlib versions 1.3.0 and later", "SIL OPEN FONT LICENSE", "Bitstream Vera"] },
   numpy: { spdx: "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0", source: "https://github.com/numpy/numpy", evidence: ["Redistributions in binary form must reproduce"] },
@@ -35,7 +41,9 @@ export const RECORDED: Readonly<Record<string, RecordedWheel>> = {
   pyparsing: { spdx: "MIT", source: "https://github.com/pyparsing/pyparsing", evidence: ["Permission is hereby granted, free of charge"] },
   "python-dateutil": { spdx: "BSD-3-Clause AND Apache-2.0", source: "https://github.com/dateutil/dateutil", evidence: ["Redistributions in binary form must reproduce", "Apache License"] },
   pytz: { spdx: "MIT", source: "https://github.com/stub42/pytz", evidence: ["Permission is hereby granted, free of charge"] },
+  requests: { spdx: "Apache-2.0", source: "https://github.com/psf/requests", evidence: ["Apache License"] },
   six: { spdx: "MIT", source: "https://github.com/benjaminp/six", evidence: ["Permission is hereby granted, free of charge"] },
+  urllib3: { spdx: "MIT", source: "https://github.com/urllib3/urllib3", evidence: ["Permission is hereby granted, free of charge"] },
 };
 
 export interface WheelNotice {
@@ -80,7 +88,8 @@ export function declaredLicense(metadata: ReadonlyMap<string, readonly string[]>
   return [summary, ...classifiers.map(value => `classifier: ${value}`)].filter(part => part !== "").join("; ") || "none declared";
 }
 
-const LICENSE_FILE = /(^|\/)(LICEN[CS]E|COPYING)([._-][^/]*)?$|(^|\/)LICEN[CS]E[._-][A-Za-z]+$/iu;
+// NOTICE files count too: Apache-2.0 section 4(d) asks for their text (requests carries one).
+const LICENSE_FILE = /(^|\/)(LICEN[CS]E|COPYING|NOTICE)([._-][^/]*)?$|(^|\/)LICEN[CS]E[._-][A-Za-z]+$/iu;
 
 function normalize(text: string): string {
   return `${text.replaceAll("\r\n", "\n").trimEnd()}\n`;

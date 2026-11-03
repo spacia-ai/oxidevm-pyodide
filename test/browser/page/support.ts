@@ -2,6 +2,7 @@ import type { ProcessExit, ProcessHandle, UserspaceVM } from "@oxidevm/sdk";
 import { spawnModule } from "@oxidevm/sdk/wasm";
 import type { ModuleHandle } from "@oxidevm/sdk/wasm";
 import type { CommandSwitch, EnabledCommands } from "./scenarios-commands.ts";
+import type { InternetConfig } from "./scenarios-internet.ts";
 
 /** What a scenario works with: the booted VM and the installed module, and its commands once they are on. */
 export interface Context {
@@ -11,6 +12,10 @@ export interface Context {
   readonly commands?: CommandSwitch;
   /** The commands, while they are on. */
   readonly enabledCommands?: EnabledCommands;
+  /** Boots another VM like `vm`, for a scenario that needs one whose module files were never checked. */
+  readonly openVM?: () => Promise<UserspaceVM>;
+  /** The relay test peer and the test root, when the harness runs the internet scenarios (`--internet`). */
+  readonly internet?: InternetConfig;
 }
 
 export const decoder = new TextDecoder();
@@ -184,4 +189,27 @@ export async function finishWithin(running: Running, milliseconds: number): Prom
   if (outcome.finished !== undefined) return outcome.finished;
   await running.process.kill("SIGKILL", { scope: "process-group" }).catch(() => undefined);
   throw new Error(`the program did not finish within ${String(milliseconds)} ms; standard output so far: ${JSON.stringify(running.stdout.text)}; standard error so far: ${JSON.stringify(running.stderr.text)}`);
+}
+
+/**
+ * Ends an interactive shell with `exit` and waits at most `milliseconds` for it; a shell that is still there is killed,
+ * and the scenario fails with what the terminal showed, so that a shell that does not exit is reported, not waited for.
+ */
+export async function exitShell(handle: Pick<ProcessHandle, "exit" | "kill">, writer: WritableStreamDefaultWriter<Uint8Array>, shown: () => string, milliseconds = 30_000): Promise<void> {
+  await writer.write(encoder.encode("exit\n"));
+  const ended = await Promise.race([handle.exit.then(() => true, () => true), sleep(milliseconds).then(() => false)]);
+  if (ended) return;
+  await handle.kill("SIGKILL").catch(() => undefined);
+  throw new Error(`the shell did not exit within ${String(milliseconds)} ms of exit; the terminal showed ${JSON.stringify(shown().slice(-600))}`);
+}
+
+/** `work`, or a failure naming `label` when it takes longer than `milliseconds`, so that a step that hangs is named. */
+export async function within<T>(label: string, milliseconds: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { reject(new Error(`${label} did not finish within ${String(milliseconds)} ms`)); }, milliseconds); });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

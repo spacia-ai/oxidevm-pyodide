@@ -322,3 +322,23 @@ print(len(held))
     expect(guest.sockets.closed.length - closedBefore).toBe(33);
   });
 });
+
+describe("the oxidevm module without WebAssembly JSPI", () => {
+  it("refuses run, connect_unix and connect_tcp with ENOTSUP before anything starts, where Python cannot wait", () => {
+    const natives = guest.nativeRequests.length, sockets = guest.socketRequests.length;
+    const seen: unknown = guest.py.runPython(`import errno, json, oxidevm
+from pyodide.ffi import can_run_sync
+seen = [can_run_sync()]
+for call in (lambda: oxidevm.run(["/bin/true"]), lambda: oxidevm.connect_unix("/workspace/_oxidevm/s.sock"), lambda: oxidevm.connect_tcp(8080)):
+    try:
+        call()
+        seen.append("ran")
+    except OSError as error:
+        seen.append([error.errno == errno.ENOTSUP, error.strerror])
+json.dumps(seen)`);
+    const message = "the oxidevm module waits for the VM with WebAssembly JavaScript Promise Integration (JSPI), which this browser does not provide; Python's own socket module reaches services in the VM without it";
+    expect(JSON.parse(String(seen))).toEqual([false, [true, message], [true, message], [true, message]]);
+    expect(guest.nativeRequests).toHaveLength(natives);
+    expect(guest.socketRequests).toHaveLength(sockets);
+  });
+});

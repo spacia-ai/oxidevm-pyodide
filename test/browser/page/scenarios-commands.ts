@@ -27,9 +27,6 @@ const WORK = "/workspace/_oxidevm";
  */
 const PRINT_STATUS = 'echo "s$((1+1))=$?"';
 
-/** What the module says, after its argv[0], when there is no program and standard input is a terminal. */
-const REPL_REFUSAL = "the interactive interpreter is not supported yet; use FILE, -c CODE or -";
-
 interface Shell {
   readonly code: number;
   readonly stdout: string;
@@ -46,11 +43,16 @@ function expectShell(result: Shell, code: number, stdout: string, what: string):
   same({ code: result.code, stdout: result.stdout }, { code, stdout }, `${what} (stderr: ${result.stderr.slice(-600)})`);
 }
 
-/** A shell on a terminal of its own; `type` sends a line, `output` collects what the terminal shows. */
-async function terminal(vm: UserspaceVM, command: string, args: readonly string[] = []): Promise<{ readonly handle: TerminalHandle; readonly output: Capture; type(line: string): Promise<void> }> {
+/** A shell on a terminal of its own; `type` sends a line, `send` raw keys (Ctrl+D), `output` collects what the terminal shows. */
+async function terminal(vm: UserspaceVM, command: string, args: readonly string[] = []): Promise<{ readonly handle: TerminalHandle; readonly output: Capture; type(line: string): Promise<void>; send(keys: string): Promise<void> }> {
   const handle = await vm.spawn({ command, args, cwd: WORK, terminal: { columns: 100, rows: 30 } });
   const writer = handle.stdin.getWriter();
-  return { handle, output: new Capture(handle.output), type: line => writer.write(encoder.encode(`${line}\n`)) };
+  return { handle, output: new Capture(handle.output), type: line => writer.write(encoder.encode(`${line}\n`)), send: keys => writer.write(encoder.encode(keys)) };
+}
+
+/** How many times `needle` appears in `text`. */
+function count(text: string, needle: string): number {
+  return text.split(needle).length - 1;
 }
 
 function switchOf(context: Context): CommandSwitch {
@@ -143,23 +145,61 @@ export async function commandPipe(context: Context): Promise<string> {
 }
 
 export async function commandRepl(context: Context): Promise<string> {
-  // Started directly, argv[0] is the path; the terminal turns the message's newline into CR LF.
-  const direct = await terminal(context.vm, "/usr/local/bin/python3");
-  const exit = await direct.handle.exit;
-  await direct.output.done;
-  same({ exit, shown: direct.output.text }, { exit: { kind: "exited", code: 2 }, shown: `/usr/local/bin/python3: ${REPL_REFUSAL}\r\n` }, "python3 started on a terminal");
-  // Typed in a shell, argv[0] is the name as typed.
   const session = await terminal(context.vm, "/bin/sh", ["-i"]);
-  await session.type("python3");
-  await session.output.waitFor(REPL_REFUSAL);
+  // NO_COLOR: CPython colours tracebacks on a terminal, which would split the texts waited for.
+  await session.type("NO_COLOR=1 python3 -q");
+  await session.output.waitFor(">>> ");
+  // Each result differs from the text typed, which the terminal echoes.
+  await session.type("6 * 7");
+  await session.output.waitFor("42\r\n>>> ");
+  await session.type("for i in range(2):");
+  await session.output.waitFor("... ");
+  await session.type("    print('row', i + 10)");
+  await session.type("");
+  await session.output.waitFor("row 11\r\n>>> ");
+  await sleep(200);
+  await session.handle.interrupt();
+  await session.output.waitFor("\r\nKeyboardInterrupt\r\n>>> ");
+  await session.type("while True: pass");
+  await session.type("");
+  await sleep(800);
+  await session.handle.interrupt();
+  await session.output.waitFor("    while True: pass");
+  await session.output.waitFor("KeyboardInterrupt\r\n>>> ");
+  await session.type("'af' + 'ter'");
+  await session.output.waitFor("'after'\r\n>>> ");
+  await session.send("\u0004");
   await session.type(PRINT_STATUS);
   await session.output.waitFor("s2=");
   await sleep(300);
   const shown = session.output.text;
+  // A session that reported a KeyboardInterrupt ends killed by SIGINT at Ctrl+D, as CPython 3.14's does.
+  check(shown.includes("s2=130") && count(shown, "KeyboardInterrupt") >= 2, `the REPL session: ${JSON.stringify(shown.slice(-900))}`);
+  await session.type("NO_COLOR=1 python3 -q -i -c 'x = 5'");
+  await session.output.waitFor(">>> ");
+  await session.type("x + 37");
+  await session.output.waitFor("42\r\n>>> ");
+  await session.send("\u0004");
+  await session.type(PRINT_STATUS);
+  await session.output.waitFor("s2=0");
   await session.type("exit");
   await session.handle.exit;
-  check(shown.includes(`\npython3: ${REPL_REFUSAL}\r\n`) && shown.includes("s2=2\r\n"), `python3 typed in a shell on a terminal: ${JSON.stringify(shown.slice(-600))}`);
-  return "with a terminal on standard input and no program, python3 started directly and python3 typed in a shell stop with status 2 and the exact message";
+  return "python3 -q on a terminal: expressions, a block, Ctrl+C at the prompt and in a loop, Ctrl+D ending by SIGINT (130) after an interrupt; python3 -i -c then Ctrl+D with 0";
+}
+
+export async function commandModule(context: Context): Promise<string> {
+  expectShell(await shell(context.vm, "echo '{\"a\": [1]}' | python3 -m json.tool"), 0, '{\n    "a": [\n        1\n    ]\n}\n', "python3 -m json.tool");
+  const missing = await shell(context.vm, "python3 -m nosuchmodule");
+  same({ code: missing.code, stderr: missing.stderr }, { code: 1, stderr: "/usr/local/bin/python3: No module named nosuchmodule\n" }, "python3 -m with a missing module");
+  await context.vm.workspace.writeText("_oxidevm/mod_here.py", "import sys\nprint(__name__, sys.argv)\n");
+  expectShell(await shell(context.vm, "python3 -m mod_here a"), 0, `__main__ ['${WORK}/mod_here.py', 'a']\n`, "python3 -m with a module in the working directory");
+  return "python3 -m runs a standard module and one from the working directory, and names a missing one as CPython does";
+}
+
+export async function commandLazyImport(context: Context): Promise<string> {
+  const began = performance.now();
+  expectShell(await shell(context.vm, "python3 -c 'import numpy; print(numpy.__version__)'"), 0, "2.4.6\n", "import numpy without preloading it");
+  return `numpy loaded on import by a command whose packages are none, in ${String(Math.round(performance.now() - began))} ms`;
 }
 
 export async function commandPlaces(context: Context): Promise<string> {
@@ -215,7 +255,7 @@ export async function commandSleepInterrupt(context: Context): Promise<string> {
   await context.vm.workspace.writeText("_oxidevm/sleeper.py", "import time\nprint('asleep', flush=True)\ntime.sleep(600)\n");
   const session = await terminal(context.vm, "/bin/sh", ["-i"]);
   // On a line of its own: an interactive shell drops the rest of a line once a Ctrl+C has killed its command.
-  await session.type(`python3 ${WORK}/sleeper.py`);
+  await session.type(`NO_COLOR=1 python3 ${WORK}/sleeper.py`);
   await session.output.waitFor("asleep");
   await sleep(300);
   const pressed = performance.now();
@@ -260,7 +300,9 @@ export const COMMAND_SCENARIOS: readonly (readonly [name: string, run: (context:
   ["command: python, the other name", commandAlias],
   ["command: python3 FILE with arguments and its status", commandFile],
   ["command: programs on standard input, with and without -", commandPipe],
-  ["command: no program on a terminal is refused (no REPL yet)", commandRepl],
+  ["command: the interactive interpreter on a terminal, and -i", commandRepl],
+  ["command: python3 -m", commandModule],
+  ["command: a package loads when imported", commandLazyImport],
   ["command: runs from /tmp, refuses / before Python loads", commandPlaces],
   ["command: shebang scripts", commandShebang],
   ["command: the JavaScript bridge is hidden from commands only", commandBridgeHidden],

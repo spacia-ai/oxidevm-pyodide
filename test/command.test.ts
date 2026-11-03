@@ -10,12 +10,13 @@ import { PYTHON_VERSION } from "../src/cli.ts";
 import { createCommand } from "../src/command.ts";
 import type { CommandHost } from "../src/host-types.ts";
 import type { Engine, PyodideOptions } from "../src/python-loader.ts";
-import type { PythonCommand, ShippedFile } from "../src/shipped.ts";
+import type { PythonCommand } from "../src/shipped.ts";
 import { processId } from "./support/brands.ts";
 import { normalised, oracle, oracleFiles, recordedOutcome } from "./support/cpython-oracle.ts";
 import { fakeProcess } from "./support/fake-process.ts";
 import { fakeSignals } from "./support/fake-signals.ts";
 import { echoUpperCase, fakeSockets } from "./support/fake-sockets.ts";
+import { fakeNet } from "./support/fake-net.ts";
 import { fakeStdio } from "./support/fake-stdio.ts";
 import { nodeFiles } from "./support/node-files.ts";
 import { startPyodide } from "./support/pyodide-node.ts";
@@ -44,7 +45,8 @@ interface Setup {
   readonly close: () => Promise<void>;
   readonly failures: string[];
   readonly logs: string[];
-  readonly artifactsRead: ShippedFile[];
+  /** Every artifact read (its name) or compiled (`compile <name>`), in order. */
+  readonly artifactsRead: string[];
   readonly startedWith: PyodideOptions[];
   readonly sockets: ReturnType<typeof fakeSockets>;
   readonly stdio: ReturnType<typeof fakeStdio>;
@@ -79,7 +81,7 @@ function setup(options: SetupOptions = {}): Setup {
   const children = fakeProcess(() => ({}));
   const sockets = fakeSockets();
   sockets.listen("unix:/workspace/_oxidevm/echo.sock", echoUpperCase());
-  const failures: string[] = [], logs: string[] = [], artifactsRead: ShippedFile[] = [], startedWith: PyodideOptions[] = [], events: string[] = [];
+  const failures: string[] = [], logs: string[] = [], artifactsRead: string[] = [], startedWith: PyodideOptions[] = [], events: string[] = [];
   const signals = fakeSignals(events, { pendingAtTrap: options.interruptAtTrap === true });
   const toStderr = (text: string): void => { stdio.files.writeAll(stdio.streams.stderr, new TextEncoder().encode(`${text}\n`)); };
   const lifetime = new AbortController();
@@ -87,18 +89,25 @@ function setup(options: SetupOptions = {}): Setup {
   const host: CommandHost = {
     signal: lifetime.signal,
     options: { packages: [] },
-    artifacts: { bytes: options.bytes ?? ((name) => { artifactsRead.push(name); return Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : name)); }) },
+    artifacts: {
+      bytes: options.bytes ?? ((name) => { artifactsRead.push(name); return Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : name)); }),
+      // The runner answers with the module the VM compiled once; the test counts the requests.
+      bytesSync: name => { artifactsRead.push(`bytesSync ${name}`); return new TextEncoder().encode(name); },
+      compile: name => { artifactsRead.push(`compile ${name}`); return Promise.resolve(new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))); },
+    },
     kit,
     stdio: stdio.streams,
     fs: options.fs?.(files.files) ?? files.files,
     files: children.host.files,
     sockets: sockets.sockets,
+    net: fakeNet({}, {}).host.net,
     process: { ...children.host.process, signals: signals.signals, info: () => Promise.resolve({ pid: processId(777), parentPid: null, uid: 1000, gid: 100, cwd: "/workspace", args: [], environment: [], terminal: options.terminal ?? null }) },
     log: line => { logs.push(line); toStderr(line); },
     fail: (status, message) => { failures.push(`${String(status)}: ${message}`); toStderr(message); return status; },
   };
   const engine: Engine = {
     scope: { fetch: () => Promise.reject(new Error("no network in tests")) },
+    wasm: { instantiateStreaming: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")), instantiate: () => Promise.reject(new Error("not used")) },
     createPyodideModule: () => Promise.reject(new Error("not used: Node starts Pyodide from node_modules")),
     loadPyodide: async started => {
       startedWith.push(started);
@@ -161,16 +170,6 @@ describe("a command that answers without starting Python", () => {
     expect(await s.main(["--help"])).toBe(0);
   });
 
-  it("refuses the interactive interpreter: no program with a terminal on standard input, and -i", async () => {
-    const s = setup();
-    const refusal = "the interactive interpreter is not supported yet; use FILE, -c CODE or -";
-    expect(await s.main([], { terminals: { stdin: true } })).toBe(2);
-    expect(await s.main(["-"], { terminals: { stdin: true }, invocation: PYTHON })).toBe(2);
-    expect(await s.main(["-i", "-c", "pass"])).toBe(2);
-    expect(s.failures).toEqual([`2: python3: ${refusal}`, `2: python: ${refusal}`, `2: python3: ${refusal}`]);
-    expect(s.startedWith).toEqual([]);
-  });
-
   it("refuses to run in a directory Python cannot see, or a file there, instead of running somewhere else", async () => {
     const s = setup();
     const where = (place: string): string => `2: python3: cannot run in '${place}': this Python sees the VM's files only under /workspace, /tmp and $HOME`;
@@ -202,8 +201,8 @@ describe("a command that answers without starting Python", () => {
 
   it("lets a file that does not match its pin stop it, as the runner's integrity failure, not as a status", async () => {
     await writeFile(join(root, "workspace/ok.py"), "print('never runs')");
-    const tampered = new Error("pyodide.asm.wasm does not match its sha256 pin");
-    const s = setup({ bytes: name => (name === "pyodide.asm.wasm" ? Promise.reject(tampered) : Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : "x"))) });
+    const tampered = new Error("python_stdlib.zip does not match its sha256 pin");
+    const s = setup({ bytes: name => (name === "python_stdlib.zip" ? Promise.reject(tampered) : Promise.resolve(new TextEncoder().encode(name === "pyodide-lock.json" ? '{"packages":{}}' : "x"))) });
     await expect(s.main(["/workspace/ok.py"])).rejects.toBe(tampered);
     expect(s.startedWith).toEqual([]);
     expect(s.stdio.take()).toEqual({ stdout: "", stderr: "" });
@@ -219,7 +218,8 @@ describe("a command that runs", { timeout: 30_000 }, () => {
     expect(s.stdio.take()).toEqual({ stdout: "ran ['/workspace/program.py', 'x', 'y'] 777 1000 100 /workspace /home/user None\n", stderr: "" });
     expect(s.startedWith).toHaveLength(1);
     expect(s.startedWith[0]?.env).toEqual({ MPLBACKEND: "Agg", PATH: "/usr/bin", HOME: "/home/user" });
-    expect([...s.artifactsRead].sort()).toEqual(["pyodide-lock.json", "pyodide.asm.wasm", "python_stdlib.zip"]);
+    // The interpreter is the module the VM compiled once (one request, no bytes); no wheel is read for a program that imports none.
+    expect([...s.artifactsRead].sort()).toEqual(["compile pyodide.asm.wasm", "pyodide-lock.json", "python_stdlib.zip"]);
     await s.close();
   });
 
@@ -370,4 +370,26 @@ import js`;
     expect(s.logs).toEqual([JSON.stringify({ oxidevm: "log", module: "pyodide", event: "workspace-io", message: "the host broke" })]);
     await s.close();
   });
+});
+
+describe("the interactive interpreter and -m, end to end", () => {
+  it("starts Python for the interactive interpreter: no program with a terminal on standard input, and -i", async () => {
+    const s = setup();
+    expect(await s.main(["-q"], { terminals: { stdin: true } })).toBe(0);
+    expect(await s.main(["-q", "-"], { terminals: { stdin: true }, invocation: PYTHON, stdin: "6 * 7\n" })).toBe(0);
+    expect(await s.main(["-q", "-i", "-c", "x = 5"], { stdin: "x + 1\n" })).toBe(0);
+    expect(s.failures).toEqual([]);
+    expect(s.startedWith).toHaveLength(3);
+    expect(s.stdio.take()).toEqual({ stdout: "42\n6\n", stderr: ">>> \n>>> >>> \n>>> >>> \n" });
+  }, 60_000);
+
+  it("runs -m through runpy and words a module it cannot find as CPython does, after sys.executable", async () => {
+    const s = setup();
+    await mkdir(s.real("/workspace/tools"), { recursive: true });
+    await writeFile(s.real("/workspace/tools/hello.py"), "import sys\nprint('hello', sys.argv)\n");
+    expect(await s.main(["-m", "tools.hello", "a"], { cwd: "/workspace" })).toBe(0);
+    expect(await s.main(["-m", "nosuch"])).toBe(1);
+    expect(await s.main(["-m", "nosuch"], { invocation: APPLICATION })).toBe(1);
+    expect(s.stdio.take()).toEqual({ stdout: "hello ['/workspace/tools/hello.py', 'a']\n", stderr: "/usr/local/bin/python3: No module named nosuch\npyodide: No module named nosuch\n" });
+  }, 60_000);
 });

@@ -1,17 +1,16 @@
 /**
  * Replaces `time.sleep` with one that Ctrl+C ends at once. Pyodide's own `time.sleep` waits on an asyncio timer: a Ctrl+C
  * during the wait is noticed only when the time is up, and then inside Pyodide's event loop, which cannot take a
- * KeyboardInterrupt (see src/signals.ts). This one waits in JavaScript through `_oxidevm_bridge.sleep`, which ends early
- * when a Ctrl+C is pending and holds it, and then raises it with `check_interrupt`. Its arguments are checked as CPython
- * 3.14's `time.sleep` checks them, with the same messages. Where Python cannot wait for JavaScript (`can_run_sync` is
- * false), Pyodide's own sleep is used.
+ * KeyboardInterrupt (see src/signals.ts). This one blocks in JavaScript through `_oxidevm_bridge.sleep`
+ * (`Interrupts.sleepSync`, with `Atomics.wait`, so it needs no WebAssembly JSPI), which ends early when a Ctrl+C is
+ * pending and holds it, and then raises it with `check_interrupt`. Its arguments are checked as CPython 3.14's
+ * `time.sleep` checks them, with the same messages.
  */
 export const SLEEP_PATCH_SOURCE = `import operator as _operator
 import time as _time
 from functools import wraps as _wraps
 
 import _oxidevm_bridge as _bridge
-from pyodide.ffi import can_run_sync as _can_run_sync, run_sync as _run_sync
 
 _pyodide_sleep = _time.sleep
 # The longest time CPython can represent: 2**63 - 1 nanoseconds.
@@ -44,9 +43,7 @@ def _seconds(value):
 @_wraps(_pyodide_sleep)
 def sleep(seconds):
     seconds = _seconds(seconds)
-    if not _can_run_sync():
-        return _pyodide_sleep(seconds)
-    _run_sync(_bridge.sleep(seconds * 1000))
+    _bridge.sleep(seconds * 1000)
     _bridge.check_interrupt()
 
 
