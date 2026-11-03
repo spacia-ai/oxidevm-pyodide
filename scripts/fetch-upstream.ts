@@ -68,7 +68,10 @@ async function readPinned(path: string, pin: PinnedFile): Promise<Uint8Array<Arr
 
 /** Reads a response body, never holding more than `limit` bytes, and refuses one that is not exactly `pin.bytes` long. */
 async function readBody(response: Response, pin: PinnedFile): Promise<Uint8Array<ArrayBuffer>> {
-  const declared = response.headers.get("content-length");
+  // With a content coding (a CDN may send a wheel brotli-encoded), Content-Length counts the encoded bytes, not the file's;
+  // the read below still refuses more than the pinned length.
+  const encoding = response.headers.get("content-encoding");
+  const declared = encoding === null || encoding.trim().toLowerCase() === "identity" ? response.headers.get("content-length") : null;
   if (declared !== null && Number(declared) > pin.bytes) throw new UpstreamError(`${pin.name}: the server announces ${declared} bytes, more than the ${String(pin.bytes)} pinned`);
   if (response.body === null) throw new UpstreamError(`${pin.name}: the response has no body`);
   const bytes = new Uint8Array(pin.bytes);

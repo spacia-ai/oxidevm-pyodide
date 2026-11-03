@@ -98,6 +98,14 @@ describe("syncUpstream", () => {
     expect(await readdir(directory)).toEqual([]);
   });
 
+  it("does not compare the pin with the Content-Length of an encoded response, whose decoded body still has to match", async () => {
+    const fetcher: Fetcher = () => Promise.resolve(new Response("x", { headers: { "content-length": "999", "content-encoding": "br" } }));
+    await syncUpstream({ lock: lockOf({ "runtime.wasm": "x" }), directory, fetcher });
+    expect(await readFile(join(directory, "runtime.wasm"), "utf8")).toBe("x");
+    const larger: Fetcher = () => Promise.resolve(new Response("xy", { headers: { "content-length": "999", "content-encoding": "br" } }));
+    expect(await failure(syncUpstream({ lock: lockOf({ "runtime.wasm": "x" }), directory: join(directory, "larger"), fetcher: larger }))).toContain("larger than the 1 bytes pinned");
+  });
+
   it("refuses a response that announces more than the pin before reading it", async () => {
     const fetcher: Fetcher = () => Promise.resolve(new Response("x", { headers: { "content-length": "999" } }));
     expect(await failure(syncUpstream({ lock: lockOf({ "runtime.wasm": "x" }), directory, fetcher }))).toContain("announces 999");
